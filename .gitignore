@@ -1,0 +1,8 @@
+.env
+livekit.yaml
+data/
+*.db
+*.db-shm
+*.db-wal
+dawnmesh-server
+

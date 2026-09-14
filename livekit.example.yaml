@@ -1,0 +1,18 @@
+port: 7880
+bind_addresses:
+  - "0.0.0.0"
+rtc:
+  tcp_port: 7881
+  udp_port: 7882
+  use_external_ip: true
+keys:
+  replace-with-livekit-api-key: replace-with-at-least-32-random-characters
+logging:
+  level: info
+turn:
+  enabled: false
+  udp_port: 3478
+  tls_port: 5349
+  # domain: turn.example.com
+  # external_tls: true
+
