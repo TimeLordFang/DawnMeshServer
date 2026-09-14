@@ -1,6 +1,6 @@
 # DawnMesh Server API v1
 
-All endpoints except `GET /healthz` require the optional deployment access credential as `Authorization: Bearer <token>` when `DAWNMESH_ACCESS_TOKEN` is configured. Member management endpoints also require the current rotating token in `X-Dawn-Session`.
+All client endpoints except `GET /healthz` require the optional deployment access credential as `Authorization: Bearer <token>` when `DAWNMESH_ACCESS_TOKEN` is configured. Member management endpoints also require the current rotating token in `X-Dawn-Session`. Admin endpoints require the separate `DAWNMESH_ADMIN_TOKEN`; the client access token is never accepted for them.
 
 JSON responses use UTF-8. Request bodies are limited to 64 KiB. Errors have the form `{"error":"message"}`.
 
@@ -44,3 +44,14 @@ Create, completed admission, and resume responses return:
 ```
 
 LiveKit join tokens expire after two minutes, begin with `canPublish=false`, and never contain the deployment API secret, room invite, or E2EE key.
+
+## Server administration
+
+The embedded console is served from `GET /admin/`. Its static assets do not require authentication, contain no secrets, and are protected by a restrictive Content Security Policy. All data and mutation requests require `Authorization: Bearer <DAWNMESH_ADMIN_TOKEN>`:
+
+- `GET /api/v1/admin/overview` returns instance limits, uptime, aggregate counts, rooms, safe member state, and recovery deadlines. Device IDs and credential hashes are omitted.
+- `PATCH /api/v1/admin/rooms/{room}` with `{"name":"..."}` renames a room and broadcasts the update.
+- `PUT /api/v1/admin/rooms/{room}/members/{member}/voice-policy` with `{"canSpeak":false}` persists and applies microphone permission. The host cannot be muted.
+- `DELETE /api/v1/admin/rooms/{room}` ends a room immediately.
+
+Admin APIs return `503` when `DAWNMESH_ADMIN_TOKEN` is unset. Invalid credentials are rate-limited per source address.

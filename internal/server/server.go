@@ -25,6 +25,7 @@ import (
 
 type Server struct {
 	cfg        config.Config
+	startedAt  time.Time
 	store      *store
 	livekit    *liveKitManager
 	mu         sync.Mutex
@@ -47,7 +48,7 @@ func New(cfg config.Config) (*Server, error) {
 		db.close()
 		return nil, err
 	}
-	server := &Server{cfg: cfg, store: db, livekit: newLiveKitManager(cfg.LiveKitURL, cfg.LiveKitPublicURL, cfg.LiveKitAPIKey, cfg.LiveKitAPISecret), rooms: rooms, members: members, admissions: map[string]*Admission{}, sockets: map[string]map[*websocket.Conn]struct{}{}, attempts: map[string][]time.Time{}, stop: make(chan struct{})}
+	server := &Server{cfg: cfg, startedAt: time.Now().UTC(), store: db, livekit: newLiveKitManager(cfg.LiveKitURL, cfg.LiveKitPublicURL, cfg.LiveKitAPIKey, cfg.LiveKitAPISecret), rooms: rooms, members: members, admissions: map[string]*Admission{}, sockets: map[string]map[*websocket.Conn]struct{}{}, attempts: map[string][]time.Time{}, stop: make(chan struct{})}
 	now := time.Now().UTC()
 	for _, room := range rooms {
 		if room.EmptyDeadline.IsZero() {
@@ -73,6 +74,10 @@ func (s *Server) Close() error { close(s.stop); return s.store.close() }
 
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
+	mux.HandleFunc("GET /admin", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/admin/", http.StatusPermanentRedirect)
+	})
+	mux.Handle("GET /admin/", http.StripPrefix("/admin/", adminUIHandler()))
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"status": "ok"})
 	})
@@ -87,6 +92,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("DELETE /api/v1/rooms/{room}/members/{member}", s.withSession(s.leaveMember))
 	mux.HandleFunc("DELETE /api/v1/rooms/{room}", s.withSession(s.endRoom))
 	mux.HandleFunc("GET /api/v1/events", s.withAccess(s.events))
+	mux.HandleFunc("GET /api/v1/admin/overview", s.withAdminAccess(s.adminOverview))
+	mux.HandleFunc("PATCH /api/v1/admin/rooms/{room}", s.withAdminAccess(s.adminRenameRoom))
+	mux.HandleFunc("PUT /api/v1/admin/rooms/{room}/members/{member}/voice-policy", s.withAdminAccess(s.adminVoicePolicy))
+	mux.HandleFunc("DELETE /api/v1/admin/rooms/{room}", s.withAdminAccess(s.adminEndRoom))
 	return limitBody(securityHeaders(mux))
 }
 
@@ -936,6 +945,10 @@ func limitBody(next http.Handler) http.Handler {
 func securityHeaders(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("X-Frame-Options", "DENY")
+		w.Header().Set("Referrer-Policy", "no-referrer")
+		w.Header().Set("Permissions-Policy", "camera=(), geolocation=(), microphone=()")
+		w.Header().Set("Content-Security-Policy", "default-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'; object-src 'none'")
 		w.Header().Set("Cache-Control", "no-store")
 		next.ServeHTTP(w, r)
 	})

@@ -29,6 +29,9 @@ func (m *liveKitManager) joinToken(room, identity, name string) (string, error) 
 }
 
 func (m *liveKitManager) setCanPublish(ctx context.Context, room, identity string, value bool) error {
+	if m.rooms == nil {
+		return nil
+	}
 	_, err := m.rooms.UpdateParticipant(ctx, &livekit.UpdateParticipantRequest{
 		Room:       room,
 		Identity:   identity,

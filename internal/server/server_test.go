@@ -26,6 +26,7 @@ func testServer(t *testing.T) *Server {
 		LiveKitAPIKey:       "test-key",
 		LiveKitAPISecret:    "test-secret-that-is-at-least-thirty-two-characters",
 		AccessToken:         "server-access",
+		AdminToken:          "admin-access-that-is-at-least-thirty-two-characters",
 		MaximumParticipants: 50,
 		MaximumRooms:        100,
 	})

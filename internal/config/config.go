@@ -19,6 +19,7 @@ type Config struct {
 	LiveKitAPIKey       string
 	LiveKitAPISecret    string
 	AccessToken         string
+	AdminToken          string
 	MaximumParticipants int
 	MaximumRooms        int
 }
@@ -43,11 +44,18 @@ func Load() (Config, error) {
 		LiveKitAPIKey:       strings.TrimSpace(os.Getenv("LIVEKIT_API_KEY")),
 		LiveKitAPISecret:    strings.TrimSpace(os.Getenv("LIVEKIT_API_SECRET")),
 		AccessToken:         strings.TrimSpace(os.Getenv("DAWNMESH_ACCESS_TOKEN")),
+		AdminToken:          strings.TrimSpace(os.Getenv("DAWNMESH_ADMIN_TOKEN")),
 		MaximumParticipants: maximum,
 		MaximumRooms:        maximumRooms,
 	}
 	if cfg.InstanceID == "" || cfg.PublicBaseURL == "" || cfg.LiveKitURL == "" || cfg.LiveKitPublicURL == "" || cfg.LiveKitAPIKey == "" || len(cfg.LiveKitAPISecret) < 32 {
 		return Config{}, errors.New("instance id, public URLs, LiveKit key, and a 32+ character LiveKit secret are required")
+	}
+	if cfg.AdminToken != "" && len(cfg.AdminToken) < 32 {
+		return Config{}, errors.New("DAWNMESH_ADMIN_TOKEN must contain at least 32 characters")
+	}
+	if cfg.AdminToken != "" && cfg.AdminToken == cfg.AccessToken {
+		return Config{}, errors.New("DAWNMESH_ADMIN_TOKEN must differ from DAWNMESH_ACCESS_TOKEN")
 	}
 	publicURL, publicErr := url.Parse(cfg.PublicBaseURL)
 	liveKitPublicURL, liveKitPublicErr := url.Parse(cfg.LiveKitPublicURL)

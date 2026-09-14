@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="light dark">
+    <meta name="robots" content="noindex,nofollow">
+    <title>DawnMesh 管理后台</title>
+    <link rel="stylesheet" href="/admin/app.css">
+    <script defer src="/admin/app.js"></script>
+  </head>
+  <body>
+    <div class="ambient ambient-one"></div>
+    <div class="ambient ambient-two"></div>
+
+    <main class="shell">
+      <section id="login-view" class="login-view">
+        <div class="login-card">
+          <div class="brand-mark" aria-hidden="true">D</div>
+          <p class="eyebrow">DAWNMESH SERVER</p>
+          <h1>管理后台</h1>
+          <p class="muted">查看房间状态，管理成员发言权限。管理员凭证只保留在当前浏览器标签页。</p>
+          <form id="login-form">
+            <label for="token-input">管理员凭证</label>
+            <div class="token-row">
+              <input id="token-input" name="token" type="password" autocomplete="current-password" required placeholder="DAWNMESH_ADMIN_TOKEN">
+              <button id="toggle-token" class="icon-button" type="button" aria-label="显示凭证" title="显示凭证">显示</button>
+            </div>
+            <button id="login-button" class="primary-button wide" type="submit">进入后台</button>
+          </form>
+          <p id="login-error" class="form-error" role="alert"></p>
+        </div>
+      </section>
+
+      <section id="dashboard-view" class="dashboard" hidden>
+        <header class="topbar">
+          <div class="brand-inline">
+            <div class="brand-mark small" aria-hidden="true">D</div>
+            <div>
+              <p class="eyebrow">DAWNMESH SERVER</p>
+              <h1 id="instance-name">管理后台</h1>
+            </div>
+          </div>
+          <div class="topbar-actions">
+            <span id="connection-state" class="connection-pill"><span class="status-dot"></span>正在连接</span>
+            <button id="refresh-button" class="secondary-button" type="button">刷新</button>
+            <button id="logout-button" class="ghost-button" type="button">退出</button>
+          </div>
+        </header>
+
+        <section id="stats" class="stats" aria-label="服务器概览"></section>
+
+        <section class="content-card">
+          <div class="section-heading">
+            <div>
+              <p class="eyebrow">ROOMS</p>
+              <h2>房间管理</h2>
+            </div>
+            <p id="last-updated" class="muted compact"></p>
+          </div>
+          <div id="notice" class="notice" role="status" hidden></div>
+          <div id="rooms" class="room-list"></div>
+        </section>
+      </section>
+    </main>
+  </body>
+</html>

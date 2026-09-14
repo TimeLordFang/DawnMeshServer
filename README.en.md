@@ -18,6 +18,7 @@ The project does not request or renew HTTPS certificates. Put the API and LiveKi
 - Configurable 1–60 minute host disconnect deadline
 - Automatic host transfer and cleanup of empty rooms
 - Persistent control state in SQLite, with media handled by LiveKit
+- An embedded single-binary admin console for room and microphone management
 
 ## Requirements
 
@@ -64,6 +65,21 @@ Merge the relevant parts of [`deploy/nginx.example.conf`](deploy/nginx.example.c
 
 Add `DAWNMESH_PUBLIC_URL` in the Android app's network intercom settings and use `DAWNMESH_ACCESS_TOKEN` as the server credential.
 
+## Admin console
+
+Open `https://talk.example.com/admin/` and enter `DAWNMESH_ADMIN_TOKEN` from `.env`. The initialization script generates this separate administrator credential automatically. It must contain at least 32 characters and must differ from the client-facing `DAWNMESH_ACCESS_TOKEN`.
+
+The static console is compiled into the `dawnmesh-server` binary with Go `embed`; it needs no Node.js runtime, static directory, or separate web service. It can:
+
+- Show uptime, rooms, online members, and retained members
+- Show hosts, connection and recovery states, and pending admissions
+- Rename rooms
+- Disable or restore microphone permission for non-host members
+- End rooms immediately
+- Refresh automatically every 10 seconds or on demand
+
+The admin credential is kept in the current tab's `sessionStorage` and sent only through the `Authorization: Bearer` header. It does not enter the URL or cookies. Admin APIs remain disabled when `DAWNMESH_ADMIN_TOKEN` is unset. Expose the console over HTTPS only and consider an Nginx IP allowlist or additional authentication where appropriate.
+
 ## Deploy a release binary
 
 Every `v*` tag publishes Linux `amd64` and `arm64` archives plus `SHA256SUMS` on [GitHub Releases](https://github.com/TimeLordFang/DawnMeshServer/releases):
@@ -93,7 +109,7 @@ SQLite data lives in the `dawnmesh-data` volume. Back up the database together w
 
 New LiveKit join tokens start with audio publication disabled. After an authenticated management channel is established, the server applies the current persisted voice policy to the participant. Replaying an old token cannot restore revoked microphone access. Tokens expire after two minutes and API secrets stay server-side.
 
-A six-digit invitation is not strong enough to protect a public service by itself. Generate a high-entropy `DAWNMESH_ACCESS_TOKEN`, restrict database and configuration permissions, and keep images updated.
+A six-digit invitation is not strong enough to protect a public service by itself. Generate a high-entropy `DAWNMESH_ACCESS_TOKEN`, keep `DAWNMESH_ADMIN_TOKEN` away from ordinary App users, restrict database and configuration permissions, and keep images updated.
 
 The management protocol is documented in [`docs/API.md`](docs/API.md). It is versioned as `v1`; the Android client rejects incompatible versions and detects unexpected instance-ID changes.
 

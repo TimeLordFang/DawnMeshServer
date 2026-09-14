@@ -18,6 +18,7 @@ DawnMesh Server 是「曙光之声」公网对讲模式的自托管控制平面�
 - 房主创建房间时可设置 1–60 分钟的最大断线保留时间
 - 房主超时后自动转让给最早在线成员；空房在最后一人离线 10 分钟后清理
 - SQLite 持久化房间控制状态；音视频媒体由 LiveKit 处理
+- 单二进制内置管理后台，可查看房间和成员状态、改名、管理麦克风及解散房间
 
 ## 部署要求
 
@@ -64,6 +65,21 @@ docker compose up -d --build
 
 最后在 Android 客户端的网络对讲页面添加 `DAWNMESH_PUBLIC_URL`，并输入 `DAWNMESH_ACCESS_TOKEN`。
 
+## 管理后台
+
+打开 `https://talk.example.com/admin/`，输入 `.env` 中的 `DAWNMESH_ADMIN_TOKEN`。初始化脚本会自动生成独立的管理员凭证；它必须至少包含 32 个字符，并且不能与提供给手机端的 `DAWNMESH_ACCESS_TOKEN` 相同。
+
+后台静态页面通过 Go `embed` 编入 `dawnmesh-server` 二进制，不需要部署 Node.js、静态目录或额外 Web 服务。页面支持：
+
+- 查看服务运行时间、房间数、在线及保留成员数
+- 查看房主、成员在线状态、重连截止时间和待验证人数
+- 修改房间名称
+- 关闭或恢复非房主成员的麦克风权限
+- 立即解散房间
+- 每 10 秒自动刷新，也可以手动刷新
+
+管理员凭证只保存在当前标签页的 `sessionStorage`，通过 `Authorization: Bearer` 请求头发送，不进入 URL 和 Cookie。未配置 `DAWNMESH_ADMIN_TOKEN` 时管理 API 会保持禁用。建议只通过 HTTPS 开放后台，并在 Nginx 上按需增加 IP 白名单或额外认证。
+
 ## 使用二进制部署
 
 每个 `v*` 标签会在 [GitHub Releases](https://github.com/TimeLordFang/DawnMeshServer/releases) 生成 Linux `amd64`、`arm64` 压缩包和 `SHA256SUMS`。校验并安装：
@@ -93,7 +109,7 @@ SQLite 数据保存在 `dawnmesh-data` 卷中。备份时同时保存数据库�
 
 新的 LiveKit 入房令牌默认禁止发布音频。客户端建立经过认证的管理通道后，服务端才把当前持久化的发言策略应用到参与者；重放旧令牌不能恢复已被关闭的麦克风权限。令牌有效期为两分钟，API 密钥只保存在服务端。
 
-六位邀请码不适合作为公网服务的唯一访问凭据，请为 `DAWNMESH_ACCESS_TOKEN` 使用高熵随机值。公网部署还应限制数据库和配置文件权限，并定期更新镜像。
+六位邀请码不适合作为公网服务的唯一访问凭据，请为 `DAWNMESH_ACCESS_TOKEN` 使用高熵随机值。`DAWNMESH_ADMIN_TOKEN` 必须单独保管，不能发送给普通 App 用户。公网部署还应限制数据库和配置文件权限，并定期更新镜像。
 
 协议细节见 [`docs/API.md`](docs/API.md)。API 协议版本为 `v1`；Android 客户端会拒绝不兼容的协议版本，并检测服务实例 ID 的意外变化。
 
