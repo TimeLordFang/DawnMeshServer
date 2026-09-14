@@ -12,6 +12,7 @@ type Room struct {
 	CreatedAt                    time.Time `json:"-"`
 	HostReconnectDeadline        time.Time `json:"hostReconnectDeadline,omitempty"`
 	EmptyDeadline                time.Time `json:"-"`
+	MonitoringKey                []byte    `json:"-"`
 }
 
 type Member struct {

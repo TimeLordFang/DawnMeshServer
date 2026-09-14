@@ -6,7 +6,7 @@ JSON responses use UTF-8. Request bodies are limited to 64 KiB. Errors have the 
 
 ## Discovery and rooms
 
-- `GET /api/v1/info` returns `instanceId`, `name`, `protocolVersion`, and `maxRoomParticipants`.
+- `GET /api/v1/info` returns `instanceId`, `name`, `protocolVersion`, `maxRoomParticipants`, and `adminListeningSupported`.
 - `GET /api/v1/rooms` returns visible room summaries.
 - `POST /api/v1/rooms` accepts `name`, `nickname`, `deviceId`, `maxParticipants`, and `hostDisconnectTimeoutMinutes` (1–60).
 - `POST /api/v1/rooms/{room}/admissions` creates a 30-second PAKE relay session. It accepts `nickname` and `deviceId`; no invite code is sent to this API.
@@ -53,5 +53,9 @@ The embedded console is served from `GET /admin/`. Its static assets do not requ
 - `PATCH /api/v1/admin/rooms/{room}` with `{"name":"..."}` renames a room and broadcasts the update.
 - `PUT /api/v1/admin/rooms/{room}/members/{member}/voice-policy` with `{"canSpeak":false}` persists and applies microphone permission. The host cannot be muted.
 - `DELETE /api/v1/admin/rooms/{room}` ends a room immediately.
+- `POST /api/v1/admin/rooms/{room}/listen` creates a short-lived, hidden, subscribe-only LiveKit listener when the room host enabled monitoring at creation. The response includes the E2EE key and is available only to the administrator.
+- `PUT /api/v1/admin/listeners/{listener}` renews the 35-second listener lease; `DELETE` ends it. Active listener state is included in room snapshots so every App participant can display it.
 
 Admin APIs return `503` when `DAWNMESH_ADMIN_TOKEN` is unset. Invalid credentials are rate-limited per source address.
+
+`POST /api/v1/rooms` accepts the optional `monitoringKey` only when administrator access is configured. It must encode exactly 32 bytes with Base64URL. The key is wrapped with AES-256-GCM under a key derived from `DAWNMESH_ADMIN_TOKEN` before SQLite persistence. Omitting the field keeps administrator listening unavailable for that room.

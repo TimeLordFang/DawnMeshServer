@@ -35,6 +35,7 @@ type Server struct {
 	admissions map[string]*Admission
 	sockets    map[string]map[*websocket.Conn]struct{}
 	attempts   map[string][]time.Time
+	monitors   map[string]*monitorSession
 	stop       chan struct{}
 }
 
@@ -48,7 +49,7 @@ func New(cfg config.Config) (*Server, error) {
 		db.close()
 		return nil, err
 	}
-	server := &Server{cfg: cfg, startedAt: time.Now().UTC(), store: db, livekit: newLiveKitManager(cfg.LiveKitURL, cfg.LiveKitPublicURL, cfg.LiveKitAPIKey, cfg.LiveKitAPISecret), rooms: rooms, members: members, admissions: map[string]*Admission{}, sockets: map[string]map[*websocket.Conn]struct{}{}, attempts: map[string][]time.Time{}, stop: make(chan struct{})}
+	server := &Server{cfg: cfg, startedAt: time.Now().UTC(), store: db, livekit: newLiveKitManager(cfg.LiveKitURL, cfg.LiveKitPublicURL, cfg.LiveKitAPIKey, cfg.LiveKitAPISecret), rooms: rooms, members: members, admissions: map[string]*Admission{}, sockets: map[string]map[*websocket.Conn]struct{}{}, attempts: map[string][]time.Time{}, monitors: map[string]*monitorSession{}, stop: make(chan struct{})}
 	now := time.Now().UTC()
 	for _, room := range rooms {
 		if room.EmptyDeadline.IsZero() {
@@ -96,6 +97,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("PATCH /api/v1/admin/rooms/{room}", s.withAdminAccess(s.adminRenameRoom))
 	mux.HandleFunc("PUT /api/v1/admin/rooms/{room}/members/{member}/voice-policy", s.withAdminAccess(s.adminVoicePolicy))
 	mux.HandleFunc("DELETE /api/v1/admin/rooms/{room}", s.withAdminAccess(s.adminEndRoom))
+	mux.HandleFunc("POST /api/v1/admin/rooms/{room}/listen", s.withAdminAccess(s.adminStartListening))
+	mux.HandleFunc("PUT /api/v1/admin/listeners/{listener}", s.withAdminAccess(s.adminKeepListening))
+	mux.HandleFunc("DELETE /api/v1/admin/listeners/{listener}", s.withAdminAccess(s.adminStopListening))
 	return limitBody(securityHeaders(mux))
 }
 
@@ -131,7 +135,7 @@ func (s *Server) withSession(next func(http.ResponseWriter, *http.Request, *Memb
 }
 
 func (s *Server) info(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{"instanceId": s.cfg.InstanceID, "name": s.cfg.InstanceName, "protocolVersion": 1, "maxRoomParticipants": s.cfg.MaximumParticipants})
+	writeJSON(w, http.StatusOK, map[string]any{"instanceId": s.cfg.InstanceID, "name": s.cfg.InstanceName, "protocolVersion": 1, "maxRoomParticipants": s.cfg.MaximumParticipants, "adminListeningSupported": s.cfg.AdminToken != ""})
 }
 
 func (s *Server) listRooms(w http.ResponseWriter, _ *http.Request) {
@@ -151,6 +155,7 @@ type createRoomRequest struct {
 	DeviceID        string `json:"deviceId"`
 	MaxParticipants int    `json:"maxParticipants"`
 	HostTimeout     int    `json:"hostDisconnectTimeoutMinutes"`
+	MonitoringKey   string `json:"monitoringKey"`
 }
 
 func (s *Server) createRoom(w http.ResponseWriter, r *http.Request) {
@@ -165,10 +170,23 @@ func (s *Server) createRoom(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	roomID := randomID(18)
+	var wrappedMonitoringKey []byte
+	if body.MonitoringKey != "" {
+		if s.cfg.AdminToken == "" {
+			writeError(w, http.StatusBadRequest, "服务器未启用管理员收听")
+			return
+		}
+		var err error
+		wrappedMonitoringKey, err = wrapMonitoringKey(s.cfg.AdminToken, roomID, body.MonitoringKey)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "监听密钥无效")
+			return
+		}
+	}
 	memberID := randomID(18)
 	resume := randomID(32)
 	now := time.Now().UTC()
-	room := &Room{ID: roomID, Name: body.Name, HostMemberID: memberID, HostNickname: body.Nickname, MaxParticipants: body.MaxParticipants, HostDisconnectTimeoutMinutes: body.HostTimeout, CreatedAt: now}
+	room := &Room{ID: roomID, Name: body.Name, HostMemberID: memberID, HostNickname: body.Nickname, MaxParticipants: body.MaxParticipants, HostDisconnectTimeoutMinutes: body.HostTimeout, CreatedAt: now, MonitoringKey: wrappedMonitoringKey}
 	member := &Member{ID: memberID, RoomID: roomID, Nickname: body.Nickname, DeviceID: body.DeviceID, ResumeTokenHash: tokenHash(resume), CanSpeak: true, JoinOrder: 1, IsHost: true}
 	s.mu.Lock()
 	if len(s.rooms) >= s.cfg.MaximumRooms || !s.allowAttemptLocked("create:ip:"+clientIP(r), 10, time.Minute) || !s.allowAttemptLocked("create:device:"+body.DeviceID, 3, time.Minute) {
@@ -191,9 +209,13 @@ func (s *Server) createRoom(w http.ResponseWriter, r *http.Request) {
 	s.members[memberID] = member
 	err1 := s.store.saveRoom(r.Context(), room)
 	err2 := s.store.saveMember(r.Context(), member)
+	var err3 error
+	if len(room.MonitoringKey) > 0 {
+		err3 = s.store.saveMonitoringKey(r.Context(), room.ID, room.MonitoringKey)
+	}
 	grant, grantErr := s.connectionGrant(room, member, resume)
 	s.mu.Unlock()
-	if err1 != nil || err2 != nil {
+	if err1 != nil || err2 != nil || err3 != nil {
 		writeError(w, http.StatusInternalServerError, "无法保存房间")
 		return
 	}
@@ -602,7 +624,7 @@ func (s *Server) connectionGrant(room *Room, member *Member, resume string) (map
 }
 
 func (s *Server) roomJSON(room *Room) map[string]any {
-	return map[string]any{"id": room.ID, "name": room.Name, "memberCount": s.memberCount(room.ID), "maxParticipants": room.MaxParticipants, "hostNickname": room.HostNickname, "hostDisconnectTimeoutMinutes": room.HostDisconnectTimeoutMinutes}
+	return map[string]any{"id": room.ID, "name": room.Name, "memberCount": s.memberCount(room.ID), "maxParticipants": room.MaxParticipants, "hostNickname": room.HostNickname, "hostDisconnectTimeoutMinutes": room.HostDisconnectTimeoutMinutes, "adminListeningAvailable": len(room.MonitoringKey) > 0, "adminListening": s.monitorCountLocked(room.ID) > 0}
 }
 func (s *Server) memberCount(roomID string) int {
 	count := 0
@@ -725,6 +747,12 @@ func (s *Server) sweep(now time.Time) {
 			delete(s.attempts, key)
 		}
 	}
+	for id, session := range s.monitors {
+		if !now.Before(session.ExpiresAt) {
+			delete(s.monitors, id)
+			changed[session.RoomID] = true
+		}
+	}
 	for _, room := range s.rooms {
 		if !room.EmptyDeadline.IsZero() && now.After(room.EmptyDeadline) {
 			deleteRooms = append(deleteRooms, room.ID)
@@ -793,6 +821,11 @@ func (s *Server) deleteRoom(ctx context.Context, id string) {
 		}
 	}
 	delete(s.rooms, id)
+	for monitorID, session := range s.monitors {
+		if session.RoomID == id {
+			delete(s.monitors, monitorID)
+		}
+	}
 	for memberID, m := range s.members {
 		if m.RoomID == id {
 			delete(s.members, memberID)
@@ -948,7 +981,7 @@ func securityHeaders(next http.Handler) http.Handler {
 		w.Header().Set("X-Frame-Options", "DENY")
 		w.Header().Set("Referrer-Policy", "no-referrer")
 		w.Header().Set("Permissions-Policy", "camera=(), geolocation=(), microphone=()")
-		w.Header().Set("Content-Security-Policy", "default-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'; object-src 'none'")
+		w.Header().Set("Content-Security-Policy", "default-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'; object-src 'none'; worker-src 'self'; connect-src 'self' https: wss:")
 		w.Header().Set("Cache-Control", "no-store")
 		next.ServeHTTP(w, r)
 	})

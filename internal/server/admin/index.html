@@ -7,6 +7,7 @@
     <meta name="robots" content="noindex,nofollow">
     <title>DawnMesh 管理后台</title>
     <link rel="stylesheet" href="/admin/app.css">
+    <script defer src="/admin/vendor/livekit-client.umd.js"></script>
     <script defer src="/admin/app.js"></script>
   </head>
   <body>
@@ -59,6 +60,18 @@
             <p id="last-updated" class="muted compact"></p>
           </div>
           <div id="notice" class="notice" role="status" hidden></div>
+          <section id="listening-panel" class="listening-panel" aria-live="polite" hidden>
+            <div>
+              <p class="eyebrow">LIVE MONITOR</p>
+              <h3 id="listening-title">正在连接房间音频</h3>
+              <p id="listening-status" class="muted compact">建立端到端加密的只听连接…</p>
+            </div>
+            <div id="monitor-audio" class="monitor-audio"></div>
+            <div class="listening-actions">
+              <button id="resume-audio-button" class="secondary-button" type="button">启用声音</button>
+              <button id="stop-listening-button" class="danger-button" type="button">停止收听</button>
+            </div>
+          </section>
           <div id="rooms" class="room-list"></div>
         </section>
       </section>

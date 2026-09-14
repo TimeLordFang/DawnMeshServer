@@ -37,6 +37,10 @@ CREATE TABLE IF NOT EXISTS members (
  reconnect_deadline INTEGER
 );
 CREATE INDEX IF NOT EXISTS members_room_order ON members(room_id, join_order);
+CREATE TABLE IF NOT EXISTS room_monitor_keys (
+ room_id TEXT PRIMARY KEY REFERENCES rooms(id) ON DELETE CASCADE,
+ wrapped_key BLOB NOT NULL
+);
 `)
 	return err
 }
@@ -72,6 +76,12 @@ can_speak=excluded.can_speak,join_order=excluded.join_order,reconnect_deadline=e
 	return err
 }
 
+func (s *store) saveMonitoringKey(ctx context.Context, roomID string, wrapped []byte) error {
+	_, err := s.db.ExecContext(ctx, `INSERT INTO room_monitor_keys(room_id,wrapped_key) VALUES(?,?)
+ON CONFLICT(room_id) DO UPDATE SET wrapped_key=excluded.wrapped_key`, roomID, wrapped)
+	return err
+}
+
 func (s *store) load(ctx context.Context) (map[string]*Room, map[string]*Member, error) {
 	rooms := map[string]*Room{}
 	members := map[string]*Member{}
@@ -93,6 +103,24 @@ func (s *store) load(ctx context.Context) (map[string]*Room, map[string]*Member,
 		rooms[room.ID] = room
 	}
 	if err := rows.Close(); err != nil {
+		return nil, nil, err
+	}
+	keyRows, err := s.db.QueryContext(ctx, `SELECT room_id,wrapped_key FROM room_monitor_keys`)
+	if err != nil {
+		return nil, nil, err
+	}
+	for keyRows.Next() {
+		var roomID string
+		var wrapped []byte
+		if err := keyRows.Scan(&roomID, &wrapped); err != nil {
+			keyRows.Close()
+			return nil, nil, err
+		}
+		if room := rooms[roomID]; room != nil {
+			room.MonitoringKey = append([]byte(nil), wrapped...)
+		}
+	}
+	if err := keyRows.Close(); err != nil {
 		return nil, nil, err
 	}
 	rows, err = s.db.QueryContext(ctx, `SELECT id,room_id,nickname,device_id,resume_token_hash,can_speak,join_order,reconnect_deadline FROM members`)

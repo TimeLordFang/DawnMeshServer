@@ -6,7 +6,7 @@
 [![Release](https://github.com/TimeLordFang/DawnMeshServer/actions/workflows/release.yml/badge.svg)](https://github.com/TimeLordFang/DawnMeshServer/actions/workflows/release.yml)
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](LICENSE)
 
-DawnMesh Server is the self-hosted control plane for DawnMesh public intercom rooms. It stores room metadata in SQLite, relays the client-to-client SPAKE2 admission exchange, enforces host moderation, and issues short-lived, least-privilege LiveKit tokens. Voice and chat use client-held LiveKit E2EE keys that this service never receives.
+DawnMesh Server is the self-hosted control plane for DawnMesh public intercom rooms. It stores room metadata in SQLite, relays the client-to-client SPAKE2 admission exchange, enforces host moderation, and issues short-lived, least-privilege LiveKit tokens. Voice and chat use client-held LiveKit E2EE keys by default. A host can explicitly allow the self-hosted server administrator to listen when creating a room.
 
 The project does not request or renew HTTPS certificates. Put the API and LiveKit signalling behind an existing Nginx TLS endpoint.
 
@@ -19,6 +19,7 @@ The project does not request or renew HTTPS certificates. Put the API and LiveKi
 - Automatic host transfer and cleanup of empty rooms
 - Persistent control state in SQLite, with media handled by LiveKit
 - An embedded single-binary admin console for room and microphone management
+- Host-authorized live listening through an E2EE, subscribe-only administrator connection, with a visible in-room indicator
 
 ## Requirements
 
@@ -76,9 +77,12 @@ The static console is compiled into the `dawnmesh-server` binary with Go `embed`
 - Rename rooms
 - Disable or restore microphone permission for non-host members
 - End rooms immediately
+- Listen live to rooms whose hosts explicitly enabled administrator listening
 - Refresh automatically every 10 seconds or on demand
 
 The admin credential is kept in the current tab's `sessionStorage` and sent only through the `Authorization: Bearer` header. It does not enter the URL or cookies. Admin APIs remain disabled when `DAWNMESH_ADMIN_TOKEN` is unset. Expose the console over HTTPS only and consider an Nginx IP allowlist or additional authentication where appropriate.
+
+Live listening is disabled by default. Only an opted-in host sends the room E2EE key to the server. The server encrypts it in SQLite with AES-GCM using a key derived from `DAWNMESH_ADMIN_TOKEN`. A listener receives a hidden, subscribe-only, non-publishing LiveKit grant and renews a short lease every 10 seconds; abandoned sessions expire in about 35 seconds. Every room participant sees the active listening state. Rotating the administrator token invalidates escrowed keys for existing rooms.
 
 ## Deploy a release binary
 
@@ -103,13 +107,13 @@ UDP is preferred for real-time voice, with ICE/TCP 7881 as fallback. LiveKit's a
 - An entirely empty room is removed 10 minutes after the final disconnect, even when the host selected a longer deadline.
 - Explicit host termination removes the room immediately.
 
-SQLite data lives in the `dawnmesh-data` volume. Back up the database together with `.env` and `livekit.yaml`. Invite codes, E2EE room keys, and chat content are not written to SQLite.
+SQLite data lives in the `dawnmesh-data` volume. Back up the database together with `.env` and `livekit.yaml`. Invite codes and chat content are not written to SQLite. The server stores an E2EE room key wrapped by the administrator credential only when the host explicitly enables administrator listening.
 
 ## Security
 
 New LiveKit join tokens start with audio publication disabled. After an authenticated management channel is established, the server applies the current persisted voice policy to the participant. Replaying an old token cannot restore revoked microphone access. Tokens expire after two minutes and API secrets stay server-side.
 
-A six-digit invitation is not strong enough to protect a public service by itself. Generate a high-entropy `DAWNMESH_ACCESS_TOKEN`, keep `DAWNMESH_ADMIN_TOKEN` away from ordinary App users, restrict database and configuration permissions, and keep images updated.
+A six-digit invitation is not strong enough to protect a public service by itself. Generate a high-entropy `DAWNMESH_ACCESS_TOKEN`. `DAWNMESH_ADMIN_TOKEN` also protects host-authorized listening keys, so keep it away from ordinary App users, restrict database and configuration permissions, and keep images updated.
 
 The management protocol is documented in [`docs/API.md`](docs/API.md). It is versioned as `v1`; the Android client rejects incompatible versions and detects unexpected instance-ID changes.
 

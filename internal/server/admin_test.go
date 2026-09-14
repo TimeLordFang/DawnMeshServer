@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -40,6 +41,15 @@ func TestAdminUIIsEmbeddedAndAPIUsesSeparateCredential(t *testing.T) {
 		t.Fatalf("embedded stylesheet does not preserve hidden view state: status=%d", styles.Code)
 	}
 
+	liveKitAsset := httptest.NewRecorder()
+	handler.ServeHTTP(liveKitAsset, httptest.NewRequest(http.MethodGet, "/admin/vendor/livekit-client.umd.js", nil))
+	if liveKitAsset.Code != http.StatusOK || !strings.Contains(liveKitAsset.Body.String(), "LivekitClient") {
+		t.Fatalf("embedded LiveKit browser SDK status=%d", liveKitAsset.Code)
+	}
+	if !strings.Contains(asset.Body.String(), "keyProvider.setKey(grant.e2eeKey)") || strings.Contains(asset.Body.String(), "setKey(material.buffer)") {
+		t.Fatal("admin listener must use the cross-SDK passphrase derivation path")
+	}
+
 	for name, token := range map[string]string{
 		"missing token": "",
 		"client token":  "server-access",
@@ -66,6 +76,95 @@ func TestAdminUIIsEmbeddedAndAPIUsesSeparateCredential(t *testing.T) {
 	}
 	if strings.Contains(response.Body.String(), "server-access") || strings.Contains(response.Body.String(), "ResumeToken") {
 		t.Fatalf("overview leaked a credential: %s", response.Body.String())
+	}
+}
+
+func TestAdminListeningRequiresHostEscrowAndTracksLifetime(t *testing.T) {
+	server := testServer(t)
+	handler := server.Handler()
+	encodedKey := base64.URLEncoding.EncodeToString(make([]byte, 32))
+	createBody := `{"name":"可监听房间","nickname":"房主","deviceId":"123456789012345678901234","maxParticipants":25,"hostDisconnectTimeoutMinutes":10,"monitoringKey":"` + encodedKey + `"}`
+	createRequest := httptest.NewRequest(http.MethodPost, "/api/v1/rooms", strings.NewReader(createBody))
+	createRequest.Header.Set("Authorization", "Bearer server-access")
+	createResponse := httptest.NewRecorder()
+	handler.ServeHTTP(createResponse, createRequest)
+	if createResponse.Code != http.StatusCreated {
+		t.Fatalf("create status=%d body=%s", createResponse.Code, createResponse.Body.String())
+	}
+	var created map[string]any
+	if err := json.Unmarshal(createResponse.Body.Bytes(), &created); err != nil {
+		t.Fatal(err)
+	}
+	roomID := created["room"].(map[string]any)["id"].(string)
+
+	call := func(method, path string) *httptest.ResponseRecorder {
+		t.Helper()
+		request := httptest.NewRequest(method, path, nil)
+		request.Header.Set("Authorization", "Bearer "+testAdminToken)
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		return response
+	}
+	started := call(http.MethodPost, "/api/v1/admin/rooms/"+roomID+"/listen")
+	if started.Code != http.StatusCreated {
+		t.Fatalf("listen status=%d body=%s", started.Code, started.Body.String())
+	}
+	var grant map[string]any
+	if err := json.Unmarshal(started.Body.Bytes(), &grant); err != nil {
+		t.Fatal(err)
+	}
+	if grant["e2eeKey"] != encodedKey || grant["livekitToken"] == "" {
+		t.Fatalf("unexpected listening grant: %#v", grant)
+	}
+	parts := strings.Split(grant["livekitToken"].(string), ".")
+	if len(parts) != 3 {
+		t.Fatal("invalid listener JWT")
+	}
+	claimsBytes, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	var claims map[string]any
+	if err := json.Unmarshal(claimsBytes, &claims); err != nil {
+		t.Fatal(err)
+	}
+	video := claims["video"].(map[string]any)
+	if video["canPublish"] != false || video["canSubscribe"] != true || video["canPublishData"] != false || video["hidden"] != true {
+		t.Fatalf("listener grant is not hidden and subscribe-only: %#v", video)
+	}
+	listenerID := grant["listenerId"].(string)
+	if response := call(http.MethodPut, "/api/v1/admin/listeners/"+listenerID); response.Code != http.StatusOK {
+		t.Fatalf("heartbeat status=%d body=%s", response.Code, response.Body.String())
+	}
+	server.mu.Lock()
+	active := server.monitorCountLocked(roomID)
+	server.mu.Unlock()
+	if active != 1 {
+		t.Fatalf("active listeners=%d, want 1", active)
+	}
+	if response := call(http.MethodDelete, "/api/v1/admin/listeners/"+listenerID); response.Code != http.StatusOK {
+		t.Fatalf("stop status=%d body=%s", response.Code, response.Body.String())
+	}
+	server.mu.Lock()
+	active = server.monitorCountLocked(roomID)
+	server.mu.Unlock()
+	if active != 0 {
+		t.Fatalf("active listeners=%d after stop", active)
+	}
+}
+
+func TestAdminListeningIsUnavailableWithoutHostEscrow(t *testing.T) {
+	server := testServer(t)
+	room := &Room{ID: "private-room", Name: "Private", HostMemberID: "host", HostNickname: "Host", MaxParticipants: 25, HostDisconnectTimeoutMinutes: 10, CreatedAt: time.Now().UTC()}
+	server.mu.Lock()
+	server.rooms[room.ID] = room
+	server.mu.Unlock()
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/admin/rooms/private-room/listen", nil)
+	request.Header.Set("Authorization", "Bearer "+testAdminToken)
+	response := httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, request)
+	if response.Code != http.StatusConflict {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
 	}
 }
 

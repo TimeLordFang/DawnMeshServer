@@ -43,6 +43,8 @@ type adminRoom struct {
 	EmptyDeadline                *time.Time    `json:"emptyDeadline,omitempty"`
 	PendingAdmissions            int           `json:"pendingAdmissions"`
 	Members                      []adminMember `json:"members"`
+	AdminListeningAvailable      bool          `json:"adminListeningAvailable"`
+	ActiveAdminListeners         int           `json:"activeAdminListeners"`
 }
 
 type adminMember struct {
@@ -114,6 +116,8 @@ func (s *Server) adminOverview(w http.ResponseWriter, _ *http.Request) {
 			HostReconnectDeadline:        timePointer(room.HostReconnectDeadline),
 			EmptyDeadline:                timePointer(room.EmptyDeadline),
 			Members:                      []adminMember{},
+			AdminListeningAvailable:      len(room.MonitoringKey) > 0,
+			ActiveAdminListeners:         s.monitorCountLocked(room.ID),
 		}
 		for _, member := range s.members {
 			if member.RoomID != room.ID {
@@ -233,6 +237,102 @@ func (s *Server) adminEndRoom(w http.ResponseWriter, r *http.Request) {
 	}
 	s.deleteRoom(r.Context(), roomID)
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+func (s *Server) adminStartListening(w http.ResponseWriter, r *http.Request) {
+	roomID := r.PathValue("room")
+	s.mu.Lock()
+	room := s.rooms[roomID]
+	if room == nil {
+		s.mu.Unlock()
+		writeError(w, http.StatusNotFound, "房间不存在")
+		return
+	}
+	wrapped := append([]byte(nil), room.MonitoringKey...)
+	s.mu.Unlock()
+	if len(wrapped) == 0 {
+		writeError(w, http.StatusConflict, "房主未允许服务器管理员收听")
+		return
+	}
+	key, err := unwrapMonitoringKey(s.cfg.AdminToken, roomID, wrapped)
+	if err != nil {
+		writeError(w, http.StatusConflict, "房间监听密钥已失效")
+		return
+	}
+	sessionID := randomID(18)
+	token, err := s.livekit.listenerToken(roomID, "admin-listener-"+sessionID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "无法签发收听凭证")
+		return
+	}
+	expiresAt := time.Now().UTC().Add(monitorSessionTTL)
+	s.mu.Lock()
+	if s.rooms[roomID] == nil {
+		s.mu.Unlock()
+		writeError(w, http.StatusNotFound, "房间不存在")
+		return
+	}
+	if s.monitorCountLocked(roomID) >= maxAdminListenersPerRoom {
+		s.mu.Unlock()
+		writeError(w, http.StatusConflict, "该房间的管理员收听连接已达上限")
+		return
+	}
+	s.monitors[sessionID] = &monitorSession{ID: sessionID, RoomID: roomID, ExpiresAt: expiresAt}
+	s.mu.Unlock()
+	s.broadcastSnapshot(roomID)
+	writeJSON(w, http.StatusCreated, map[string]any{
+		"listenerId":   sessionID,
+		"livekitUrl":   s.cfg.LiveKitPublicURL,
+		"livekitToken": token,
+		"e2eeKey":      key,
+		"expiresAt":    expiresAt,
+	})
+}
+
+func (s *Server) adminKeepListening(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("listener")
+	now := time.Now().UTC()
+	s.mu.Lock()
+	session := s.monitors[id]
+	if session == nil || now.After(session.ExpiresAt) {
+		if session != nil {
+			delete(s.monitors, id)
+		}
+		s.mu.Unlock()
+		writeError(w, http.StatusNotFound, "收听会话已结束")
+		return
+	}
+	session.ExpiresAt = now.Add(monitorSessionTTL)
+	expiresAt := session.ExpiresAt
+	s.mu.Unlock()
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "expiresAt": expiresAt})
+}
+
+func (s *Server) adminStopListening(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("listener")
+	s.mu.Lock()
+	session := s.monitors[id]
+	if session != nil {
+		delete(s.monitors, id)
+	}
+	s.mu.Unlock()
+	if session == nil {
+		writeError(w, http.StatusNotFound, "收听会话已结束")
+		return
+	}
+	s.broadcastSnapshot(session.RoomID)
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+func (s *Server) monitorCountLocked(roomID string) int {
+	count := 0
+	now := time.Now().UTC()
+	for _, session := range s.monitors {
+		if session.RoomID == roomID && now.Before(session.ExpiresAt) {
+			count++
+		}
+	}
+	return count
 }
 
 func timePointer(value time.Time) *time.Time {

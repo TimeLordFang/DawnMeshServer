@@ -58,7 +58,7 @@ jobs:
             CGO_ENABLED=0 GOOS=linux GOARCH="${arch}" \
               go build -trimpath -ldflags="-s -w" \
               -o "dist/${package}/dawnmesh-server" ./cmd/dawnmesh-server
-            cp LICENSE README.md README.en.md config.example.env livekit.example.yaml compose.yaml "dist/${package}/"
+            cp LICENSE THIRD_PARTY_NOTICES.md README.md README.en.md config.example.env livekit.example.yaml compose.yaml "dist/${package}/"
             cp -R deploy docs scripts "dist/${package}/"
             tar -C dist -czf "dist/${package}.tar.gz" "${package}"
             rm -rf "dist/${package}"

@@ -28,6 +28,26 @@ func (m *liveKitManager) joinToken(room, identity, name string) (string, error) 
 	return auth.NewAccessToken(m.key, m.secret).SetVideoGrant(grant).SetIdentity(identity).SetName(name).SetValidFor(2 * time.Minute).ToJWT()
 }
 
+func (m *liveKitManager) listenerToken(room, identity string) (string, error) {
+	canPublish := false
+	canSubscribe := true
+	canPublishData := false
+	grant := &auth.VideoGrant{
+		RoomJoin:       true,
+		Room:           room,
+		CanPublish:     &canPublish,
+		CanSubscribe:   &canSubscribe,
+		CanPublishData: &canPublishData,
+		Hidden:         true,
+	}
+	return auth.NewAccessToken(m.key, m.secret).
+		SetVideoGrant(grant).
+		SetIdentity(identity).
+		SetName("服务器管理员（只听）").
+		SetValidFor(2 * time.Minute).
+		ToJWT()
+}
+
 func (m *liveKitManager) setCanPublish(ctx context.Context, room, identity string, value bool) error {
 	if m.rooms == nil {
 		return nil

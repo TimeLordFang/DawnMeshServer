@@ -16,10 +16,18 @@ const stats = document.querySelector("#stats");
 const rooms = document.querySelector("#rooms");
 const lastUpdated = document.querySelector("#last-updated");
 const notice = document.querySelector("#notice");
+const listeningPanel = document.querySelector("#listening-panel");
+const listeningTitle = document.querySelector("#listening-title");
+const listeningStatus = document.querySelector("#listening-status");
+const monitorAudio = document.querySelector("#monitor-audio");
+const resumeAudioButton = document.querySelector("#resume-audio-button");
+const stopListeningButton = document.querySelector("#stop-listening-button");
 
 let adminToken = sessionStorage.getItem(storageKey) || "";
 let refreshTimer = null;
 let loading = false;
+let activeListener = null;
+let listenerHeartbeat = null;
 
 function node(tag, className, text) {
   const element = document.createElement(tag);
@@ -62,6 +70,94 @@ function setConnection(mode, text) {
 function showNotice(message) {
   notice.textContent = message;
   notice.hidden = !message;
+}
+
+async function resumeMonitorAudio() {
+  const elements = monitorAudio.querySelectorAll("audio");
+  const results = await Promise.allSettled(Array.from(elements, (element) => element.play()));
+  const blocked = results.some((result) => result.status === "rejected");
+  listeningStatus.textContent = blocked ? "浏览器阻止了自动播放，请再次点击启用声音。" : "正在实时收听端到端加密音频";
+}
+
+async function stopListening({ notifyServer = true } = {}) {
+  const current = activeListener;
+  activeListener = null;
+  window.clearInterval(listenerHeartbeat);
+  listenerHeartbeat = null;
+  if (!current) return;
+  try {
+    await current.room.disconnect();
+  } catch (_) {}
+  current.worker.terminate();
+  monitorAudio.replaceChildren();
+  listeningPanel.hidden = true;
+  if (notifyServer) {
+    try {
+      await api(`/api/v1/admin/listeners/${encodeURIComponent(current.id)}`, { method: "DELETE" });
+    } catch (error) {
+      if (error.status !== 404) showNotice(error.message);
+    }
+  }
+  await loadOverview().catch(() => {});
+}
+
+async function startListening(room) {
+  if (!window.LivekitClient || typeof Worker === "undefined") {
+    throw new Error("当前浏览器不支持实时收听所需的 WebRTC/E2EE 能力");
+  }
+  if (activeListener) await stopListening();
+  const grant = await api(`/api/v1/admin/rooms/${encodeURIComponent(room.id)}/listen`, { method: "POST" });
+  const worker = new Worker("/admin/vendor/livekit-client.e2ee.worker.js");
+  const keyProvider = new LivekitClient.ExternalE2EEKeyProvider();
+  const liveRoom = new LivekitClient.Room({
+    encryption: { keyProvider, worker },
+    adaptiveStream: false,
+    dynacast: false,
+  });
+  activeListener = { id: grant.listenerId, roomId: room.id, room: liveRoom, worker };
+  listeningTitle.textContent = `正在收听“${room.name}”`;
+  listeningStatus.textContent = "建立端到端加密的只听连接…";
+  listeningPanel.hidden = false;
+  liveRoom.on(LivekitClient.RoomEvent.TrackSubscribed, (track) => {
+    if (track.kind !== LivekitClient.Track.Kind.Audio) return;
+    const element = track.attach();
+    element.autoplay = true;
+    element.controls = false;
+    monitorAudio.append(element);
+    resumeMonitorAudio().catch(() => {});
+  });
+  liveRoom.on(LivekitClient.RoomEvent.TrackUnsubscribed, (track) => {
+    for (const element of track.detach()) element.remove();
+  });
+  liveRoom.on(LivekitClient.RoomEvent.Reconnecting, () => {
+    listeningStatus.textContent = "媒体连接波动，正在自动恢复…";
+  });
+  liveRoom.on(LivekitClient.RoomEvent.Reconnected, () => {
+    listeningStatus.textContent = "正在实时收听端到端加密音频";
+  });
+  try {
+    // Keep this as a string. DawnMesh's Flutter client also supplies the
+    // Base64URL room key as a passphrase; LiveKit then uses the same PBKDF2
+    // path across SDKs. Passing an ArrayBuffer would select HKDF in the web
+    // SDK and produce an incompatible media key.
+    await keyProvider.setKey(grant.e2eeKey);
+    await liveRoom.setE2EEEnabled(true);
+    await liveRoom.connect(grant.livekitUrl, grant.livekitToken, { autoSubscribe: true });
+    listeningStatus.textContent = "连接成功，等待房间语音…";
+    listenerHeartbeat = window.setInterval(async () => {
+      if (!activeListener) return;
+      try {
+        await api(`/api/v1/admin/listeners/${encodeURIComponent(activeListener.id)}`, { method: "PUT" });
+      } catch (error) {
+        showNotice(`实时收听已结束：${error.message}`);
+        await stopListening({ notifyServer: false });
+      }
+    }, 10000);
+    await loadOverview();
+  } catch (error) {
+    await stopListening();
+    throw error;
+  }
 }
 
 function formatDuration(milliseconds) {
@@ -149,9 +245,28 @@ function roomCard(room) {
   const online = room.members.filter((member) => member.connected).length;
   title.append(node("span", online ? "badge good" : "badge warn", online ? `${online} 人在线` : "当前空房"));
   if (room.pendingAdmissions) title.append(node("span", "badge warn", `${room.pendingAdmissions} 人验证中`));
+  if (room.activeAdminListeners) title.append(node("span", "badge warn", `${room.activeAdminListeners} 个管理员收听连接`));
   titleArea.append(title, node("p", "room-meta", `房主：${room.hostNickname} · ${room.members.length}/${room.maxParticipants} 人 · 创建于 ${formatTime(room.createdAt)}`));
 
   const actions = node("div", "room-actions");
+  if (room.adminListeningAvailable) {
+    const listeningHere = activeListener?.roomId === room.id;
+    actions.append(button(
+      listeningHere ? "danger-button" : "primary-button",
+      listeningHere ? "停止收听" : "实时收听",
+      async () => {
+        try {
+          if (listeningHere) {
+            await stopListening();
+          } else {
+            await startListening(room);
+          }
+        } catch (error) {
+          showNotice(`无法开始收听：${error.message}`);
+        }
+      },
+    ));
+  }
   actions.append(
     button("secondary-button", "修改名称", async () => {
       const nextName = window.prompt("新的房间名称", room.name);
@@ -272,13 +387,25 @@ toggleToken.addEventListener("click", () => {
 });
 
 refreshButton.addEventListener("click", () => loadOverview().catch(() => {}));
-logoutButton.addEventListener("click", () => {
+resumeAudioButton.addEventListener("click", () => resumeMonitorAudio().catch(() => {}));
+stopListeningButton.addEventListener("click", () => stopListening().catch(() => {}));
+logoutButton.addEventListener("click", async () => {
+  await stopListening();
   sessionStorage.removeItem(storageKey);
   adminToken = "";
   window.clearInterval(refreshTimer);
   dashboardView.hidden = true;
   loginView.hidden = false;
   tokenInput.focus();
+});
+
+window.addEventListener("beforeunload", () => {
+  if (!activeListener) return;
+  fetch(`/api/v1/admin/listeners/${encodeURIComponent(activeListener.id)}`, {
+    method: "DELETE",
+    headers: { Authorization: `Bearer ${adminToken}` },
+    keepalive: true,
+  });
 });
 
 document.addEventListener("visibilitychange", () => {

@@ -6,7 +6,7 @@
 [![Release](https://github.com/TimeLordFang/DawnMeshServer/actions/workflows/release.yml/badge.svg)](https://github.com/TimeLordFang/DawnMeshServer/actions/workflows/release.yml)
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](LICENSE)
 
-DawnMesh Server 是「曙光之声」公网对讲模式的自托管控制平面。它使用 SQLite 保存房间元数据，转发客户端之间的 SPAKE2 入房验证，执行房主管理策略，并签发短时、最小权限的 LiveKit 令牌。语音和聊天内容使用客户端持有的 LiveKit E2EE 密钥，服务端不会收到该密钥。
+DawnMesh Server 是「曙光之声」公网对讲模式的自托管控制平面。它使用 SQLite 保存房间元数据，转发客户端之间的 SPAKE2 入房验证，执行房主管理策略，并签发短时、最小权限的 LiveKit 令牌。语音和聊天内容默认只由客户端持有的 LiveKit E2EE 密钥保护；房主也可以在建房时明确允许自部署服务器管理员实时收听。
 
 本项目不申请或续期 HTTPS 证书。API 和 LiveKit 信令可以接入已有 Nginx，由 Nginx 完成 TLS 卸载。
 
@@ -19,6 +19,7 @@ DawnMesh Server 是「曙光之声」公网对讲模式的自托管控制平面�
 - 房主超时后自动转让给最早在线成员；空房在最后一人离线 10 分钟后清理
 - SQLite 持久化房间控制状态；音视频媒体由 LiveKit 处理
 - 单二进制内置管理后台，可查看房间和成员状态、改名、管理麦克风及解散房间
+- 房主授权后，管理员可在后台通过端到端加密的只听连接实时收听；房内会持续显示监听状态
 
 ## 部署要求
 
@@ -76,9 +77,12 @@ docker compose up -d --build
 - 修改房间名称
 - 关闭或恢复非房主成员的麦克风权限
 - 立即解散房间
+- 实时收听房主已授权的房间
 - 每 10 秒自动刷新，也可以手动刷新
 
 管理员凭证只保存在当前标签页的 `sessionStorage`，通过 `Authorization: Bearer` 请求头发送，不进入 URL 和 Cookie。未配置 `DAWNMESH_ADMIN_TOKEN` 时管理 API 会保持禁用。建议只通过 HTTPS 开放后台，并在 Nginx 上按需增加 IP 白名单或额外认证。
+
+实时收听默认关闭。房主建房时开启后，App 才会把房间 E2EE 密钥交给服务器；服务器使用由 `DAWNMESH_ADMIN_TOKEN` 派生的 AES-GCM 密钥加密后写入 SQLite。监听者使用隐藏、只订阅且不能发言的短时 LiveKit 凭证，需每 10 秒续租；断开或浏览器关闭后最多约 35 秒自动失效。监听期间所有房间成员都会收到并显示状态。更换管理员令牌会使已有房间的托管密钥失效。
 
 ## 使用二进制部署
 
@@ -103,13 +107,13 @@ install -m 0755 dawnmesh-server /usr/local/bin/dawnmesh-server
 - 房间完全空置后 10 分钟删除，即使房主设置了更长时间。
 - 房主主动解散房间时立即删除。
 
-SQLite 数据保存在 `dawnmesh-data` 卷中。备份时同时保存数据库、`.env` 和 `livekit.yaml`。邀请码、E2EE 房间密钥和聊天内容不会写入 SQLite。
+SQLite 数据保存在 `dawnmesh-data` 卷中。备份时同时保存数据库、`.env` 和 `livekit.yaml`。邀请码和聊天内容不会写入 SQLite；仅当房主主动允许管理员收听时，服务器才会保存由管理员令牌加密封装的 E2EE 房间密钥。
 
 ## 安全说明
 
 新的 LiveKit 入房令牌默认禁止发布音频。客户端建立经过认证的管理通道后，服务端才把当前持久化的发言策略应用到参与者；重放旧令牌不能恢复已被关闭的麦克风权限。令牌有效期为两分钟，API 密钥只保存在服务端。
 
-六位邀请码不适合作为公网服务的唯一访问凭据，请为 `DAWNMESH_ACCESS_TOKEN` 使用高熵随机值。`DAWNMESH_ADMIN_TOKEN` 必须单独保管，不能发送给普通 App 用户。公网部署还应限制数据库和配置文件权限，并定期更新镜像。
+六位邀请码不适合作为公网服务的唯一访问凭据，请为 `DAWNMESH_ACCESS_TOKEN` 使用高熵随机值。`DAWNMESH_ADMIN_TOKEN` 还用于保护房主主动托管的监听密钥，必须单独保管，不能发送给普通 App 用户。公网部署还应限制数据库和配置文件权限，并定期更新镜像。
 
 协议细节见 [`docs/API.md`](docs/API.md)。API 协议版本为 `v1`；Android 客户端会拒绝不兼容的协议版本，并检测服务实例 ID 的意外变化。
 
