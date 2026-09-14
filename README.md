@@ -1,67 +1,118 @@
-# DawnMesh Server
+# DawnMesh Server（曙光之声服务端）
 
-Self-hosted control plane and LiveKit media service for the public-internet mode of DawnMesh (曙光之声). It keeps room metadata in SQLite, relays the client-to-client SPAKE2 admission exchange, enforces host moderation, and issues short-lived, least-privilege LiveKit tokens. Voice and chat content use client-side LiveKit E2EE keys that this service never receives.
+[English](README.en.md) · [发行版](https://github.com/TimeLordFang/DawnMeshServer/releases) · [容器镜像](https://github.com/TimeLordFang/DawnMeshServer/pkgs/container/dawnmeshserver)
 
-This repository does not request or renew HTTPS certificates. Use your existing Nginx for TLS termination and reverse proxying.
+[![CI](https://github.com/TimeLordFang/DawnMeshServer/actions/workflows/ci.yml/badge.svg)](https://github.com/TimeLordFang/DawnMeshServer/actions/workflows/ci.yml)
+[![Release](https://github.com/TimeLordFang/DawnMeshServer/actions/workflows/release.yml/badge.svg)](https://github.com/TimeLordFang/DawnMeshServer/actions/workflows/release.yml)
+[![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](LICENSE)
 
-## Requirements
+DawnMesh Server 是「曙光之声」公网对讲模式的自托管控制平面。它使用 SQLite 保存房间元数据，转发客户端之间的 SPAKE2 入房验证，执行房主管理策略，并签发短时、最小权限的 LiveKit 令牌。语音和聊天内容使用客户端持有的 LiveKit E2EE 密钥，服务端不会收到该密钥。
 
-- Linux server with Docker Engine and Docker Compose
-- Public domain names for the DawnMesh API and LiveKit signalling
-- Publicly reachable UDP 7882 and TCP 7881, or equivalent Layer 4 forwarding
-- Existing Nginx HTTPS configuration
+本项目不申请或续期 HTTPS 证书。API 和 LiveKit 信令可以接入已有 Nginx，由 Nginx 完成 TLS 卸载。
 
-## Deploy
+## 功能
+
+- 一个房间默认最多 25 人，可通过 `DAWNMESH_MAX_PARTICIPANTS` 调整
+- 六位邀请码经 SPAKE2 验证，不进入 HTTP 请求、房间元数据、JWT 或服务端日志
+- 房主可修改房间名、关闭或恢复成员麦克风，并主动解散房间
+- 房主创建房间时可设置 1–60 分钟的最大断线保留时间
+- 房主超时后自动转让给最早在线成员；空房在最后一人离线 10 分钟后清理
+- SQLite 持久化房间控制状态；音视频媒体由 LiveKit 处理
+
+## 部署要求
+
+- Linux `amd64` 或 `arm64` 服务器
+- Docker Engine 与 Docker Compose，或 Go 1.27.1+
+- API 和 LiveKit 信令使用的公网域名
+- UDP 7882 与 TCP 7881 可公网访问，或有等价的四层转发
+- 已配置的 Nginx HTTPS 入口
+
+## 使用容器镜像部署
+
+克隆仓库后生成配置：
 
 ```bash
 cp config.example.env .env
 cp livekit.example.yaml livekit.yaml
-# Or generate random instance/access/LiveKit credentials first:
+# 也可以自动生成随机实例 ID、访问令牌和 LiveKit 凭据：
 ./scripts/init-config.sh
 ```
 
-Edit `.env` and `livekit.yaml`. The LiveKit API key and secret must match. Set `DAWNMESH_PUBLIC_URL` to the HTTPS API origin and `LIVEKIT_PUBLIC_URL` to the public `wss://` LiveKit signalling origin.
+编辑 `.env` 和 `livekit.yaml`。两处 LiveKit API key/secret 必须一致。将 `DAWNMESH_PUBLIC_URL` 设为 API 的 HTTPS 地址，将 `LIVEKIT_PUBLIC_URL` 设为 LiveKit 信令的公网 `wss://` 地址。
 
 ```bash
-docker compose up -d --build
+docker compose pull
+docker compose up -d --no-build
 curl -fsS https://talk.example.com/healthz
 ```
 
-Copy the relevant parts of `deploy/nginx.example.conf` into the Nginx sites you already manage. `/api/` must support WebSocket upgrades because admission and room-management events use that endpoint. Map UDP 7882 and TCP 7881 directly when possible. A successful HTTPS health check only verifies the control plane, not the WebRTC media path.
+默认镜像是 `ghcr.io/timelordfang/dawnmeshserver:latest`。如需固定版本，在 `.env` 中设置：
 
-In the Android app, add `DAWNMESH_PUBLIC_URL` as a network-intercom server and enter `DAWNMESH_ACCESS_TOKEN` as its access credential.
-
-The management protocol is documented in [`docs/API.md`](docs/API.md). `DAWNMESH_MAX_ROOMS` limits retained rooms for one process; creation and admission requests also have built-in source, device, room, and global bounds.
-
-## TURN
-
-UDP is preferred for live speech. ICE/TCP 7881 is the fallback. To support networks that block both, enable LiveKit's authenticated TURN service. TURN/TLS is a Layer 4 protocol and cannot be placed in an Nginx HTTP `location`. It can use a dedicated public port/IP, or an outer Nginx `stream` SNI split after verifying client SNI behavior. When Nginx terminates TURN TLS, set `turn.external_tls: true` in LiveKit.
-
-## State and recovery
-
-- Ordinary unexpected disconnects retain identity for 10 minutes.
-- A host chooses 1–60 minutes at room creation; 10 minutes is the default.
-- If the host deadline expires while other members remain online, ownership moves to the earliest online member.
-- An entirely empty room is removed 10 minutes after the last disconnect, even if the host selected a longer timeout.
-- Explicit host room termination is immediate.
-
-SQLite files live in the `dawnmesh-data` volume. Back up the database together with `.env` and `livekit.yaml`. Invite codes, E2EE room keys, and chat content are not stored in SQLite.
-
-## Security notes
-
-New LiveKit join tokens start with audio publication disabled. After the authenticated management channel is established, the service applies the current persisted voice policy to the connected participant. Replaying an old token therefore cannot restore a revoked microphone permission. Tokens expire after two minutes and API secrets remain server-side.
-
-The six-digit invite never enters an HTTP request, room metadata, JWT, or server log. The online host performs SPAKE2 and wraps an independent random E2EE room key for the joining client. Keep `DAWNMESH_ACCESS_TOKEN` high entropy because a six-digit human code is not suitable as an internet-wide access-control secret by itself.
-
-## Development
-
-```bash
-go test ./...
-go vet ./...
+```dotenv
+DAWNMESH_IMAGE=ghcr.io/timelordfang/dawnmeshserver:1.0.0
 ```
 
-The server API protocol is versioned as `v1`. The Android client rejects incompatible protocol versions and detects unexpected instance-ID changes.
+首次发布后，请在 GitHub 的 Package settings 中把容器包可见性设为 **Public**，这样未登录用户才能直接拉取；这是 GHCR 包的一次性仓库设置。
 
-## License
+如需从源码构建镜像：
 
-Apache License 2.0. See `LICENSE`.
+```bash
+docker compose up -d --build
+```
+
+将 [`deploy/nginx.example.conf`](deploy/nginx.example.conf) 中需要的部分加入现有 Nginx 配置。`/api/` 必须允许 WebSocket 升级，因为入房验证和房间管理事件使用该连接。优先直通 UDP 7882 和 TCP 7881；HTTPS 健康检查成功只代表控制平面可用，不代表 WebRTC 媒体链路可用。
+
+最后在 Android 客户端的网络对讲页面添加 `DAWNMESH_PUBLIC_URL`，并输入 `DAWNMESH_ACCESS_TOKEN`。
+
+## 使用二进制部署
+
+每个 `v*` 标签会在 [GitHub Releases](https://github.com/TimeLordFang/DawnMeshServer/releases) 生成 Linux `amd64`、`arm64` 压缩包和 `SHA256SUMS`。校验并安装：
+
+```bash
+sha256sum -c SHA256SUMS
+install -m 0755 dawnmesh-server /usr/local/bin/dawnmesh-server
+```
+
+进程需要读取与 `config.example.env` 对应的环境变量，并对 `DAWNMESH_DATABASE` 所在目录具有写权限。LiveKit 仍需单独运行。
+
+## TURN 与网络端口
+
+实时语音优先使用 UDP，ICE/TCP 7881 是回退链路。如果需要兼容同时封锁 UDP 和 ICE/TCP 的网络，可以开启 LiveKit 的认证 TURN。TURN/TLS 是四层协议，不能放进 Nginx 的 HTTP `location`；可使用独立公网端口/IP，或在确认客户端 SNI 行为后使用 Nginx `stream` 分流。由 Nginx 终止 TURN TLS 时，需要在 LiveKit 中设置 `turn.external_tls: true`。
+
+## 状态恢复规则
+
+- 普通成员意外断线后保留身份 10 分钟。
+- 房主在创建房间时选择 1–60 分钟，默认 10 分钟。
+- 房主超时且仍有成员在线时，房主身份转让给最早在线成员。
+- 房间完全空置后 10 分钟删除，即使房主设置了更长时间。
+- 房主主动解散房间时立即删除。
+
+SQLite 数据保存在 `dawnmesh-data` 卷中。备份时同时保存数据库、`.env` 和 `livekit.yaml`。邀请码、E2EE 房间密钥和聊天内容不会写入 SQLite。
+
+## 安全说明
+
+新的 LiveKit 入房令牌默认禁止发布音频。客户端建立经过认证的管理通道后，服务端才把当前持久化的发言策略应用到参与者；重放旧令牌不能恢复已被关闭的麦克风权限。令牌有效期为两分钟，API 密钥只保存在服务端。
+
+六位邀请码不适合作为公网服务的唯一访问凭据，请为 `DAWNMESH_ACCESS_TOKEN` 使用高熵随机值。公网部署还应限制数据库和配置文件权限，并定期更新镜像。
+
+协议细节见 [`docs/API.md`](docs/API.md)。API 协议版本为 `v1`；Android 客户端会拒绝不兼容的协议版本，并检测服务实例 ID 的意外变化。
+
+## 开发与验证
+
+```bash
+go test -race ./...
+go vet ./...
+go install golang.org/x/vuln/cmd/govulncheck@v1.8.0
+govulncheck ./...
+```
+
+推送到 `main` 或创建 Pull Request 时，CI 会执行模块一致性检查、竞态测试、`go vet`、漏洞扫描和 Linux 双架构编译。推送 `v*` 标签时，Release 工作流会发布二进制压缩包、SHA-256 校验文件和 GHCR 多架构容器镜像。Dependabot 每周检查 Go 模块、Docker 基础镜像和 GitHub Actions。
+
+```bash
+git tag -a v0.1.0 -m "DawnMesh Server v0.1.0"
+git push origin v0.1.0
+```
+
+## 开源协议
+
+DawnMesh Server 使用 [GNU Affero General Public License v3.0](LICENSE)（`AGPL-3.0-only`）。通过网络向用户提供本软件功能时，如果修改了本项目，AGPL 要求向这些用户提供对应源代码。LiveKit 及其他依赖继续使用各自的开源协议。

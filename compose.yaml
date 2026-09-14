@@ -1,5 +1,6 @@
 services:
   dawnmesh-server:
+    image: ${DAWNMESH_IMAGE:-ghcr.io/timelordfang/dawnmeshserver:latest}
     build: .
     restart: unless-stopped
     env_file: .env

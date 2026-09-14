@@ -1,0 +1,118 @@
+# DawnMesh Server
+
+[简体中文](README.md) · [Releases](https://github.com/TimeLordFang/DawnMeshServer/releases) · [Container image](https://github.com/TimeLordFang/DawnMeshServer/pkgs/container/dawnmeshserver)
+
+[![CI](https://github.com/TimeLordFang/DawnMeshServer/actions/workflows/ci.yml/badge.svg)](https://github.com/TimeLordFang/DawnMeshServer/actions/workflows/ci.yml)
+[![Release](https://github.com/TimeLordFang/DawnMeshServer/actions/workflows/release.yml/badge.svg)](https://github.com/TimeLordFang/DawnMeshServer/actions/workflows/release.yml)
+[![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](LICENSE)
+
+DawnMesh Server is the self-hosted control plane for DawnMesh public intercom rooms. It stores room metadata in SQLite, relays the client-to-client SPAKE2 admission exchange, enforces host moderation, and issues short-lived, least-privilege LiveKit tokens. Voice and chat use client-held LiveKit E2EE keys that this service never receives.
+
+The project does not request or renew HTTPS certificates. Put the API and LiveKit signalling behind an existing Nginx TLS endpoint.
+
+## Features
+
+- 25 participants per room by default, configurable through `DAWNMESH_MAX_PARTICIPANTS`
+- Six-digit invitations verified with SPAKE2 and excluded from HTTP requests, metadata, JWTs, and server logs
+- Host controls for room names, participant microphones, and explicit room termination
+- Configurable 1–60 minute host disconnect deadline
+- Automatic host transfer and cleanup of empty rooms
+- Persistent control state in SQLite, with media handled by LiveKit
+
+## Requirements
+
+- Linux `amd64` or `arm64`
+- Docker Engine and Docker Compose, or Go 1.27.1+
+- Public domains for the DawnMesh API and LiveKit signalling
+- Public UDP 7882 and TCP 7881, or equivalent Layer 4 forwarding
+- An existing Nginx HTTPS entry point
+
+## Deploy the container image
+
+Clone the repository and create the local configuration:
+
+```bash
+cp config.example.env .env
+cp livekit.example.yaml livekit.yaml
+# Or generate random instance, access, and LiveKit credentials:
+./scripts/init-config.sh
+```
+
+Edit `.env` and `livekit.yaml`. Their LiveKit API key and secret must match. Set `DAWNMESH_PUBLIC_URL` to the public HTTPS API origin and `LIVEKIT_PUBLIC_URL` to the public `wss://` signalling origin.
+
+```bash
+docker compose pull
+docker compose up -d --no-build
+curl -fsS https://talk.example.com/healthz
+```
+
+The default image is `ghcr.io/timelordfang/dawnmeshserver:latest`. Pin a version through `.env` when required:
+
+```dotenv
+DAWNMESH_IMAGE=ghcr.io/timelordfang/dawnmeshserver:1.0.0
+```
+
+After the first publication, change the container package visibility to **Public** in GitHub Package settings so anonymous users can pull it. This is a one-time GHCR package setting.
+
+Build locally from source with:
+
+```bash
+docker compose up -d --build
+```
+
+Merge the relevant parts of [`deploy/nginx.example.conf`](deploy/nginx.example.conf) into your Nginx configuration. `/api/` must allow WebSocket upgrades. Forward UDP 7882 and TCP 7881 directly when possible. A successful HTTPS health check verifies the control plane only, not the WebRTC media path.
+
+Add `DAWNMESH_PUBLIC_URL` in the Android app's network intercom settings and use `DAWNMESH_ACCESS_TOKEN` as the server credential.
+
+## Deploy a release binary
+
+Every `v*` tag publishes Linux `amd64` and `arm64` archives plus `SHA256SUMS` on [GitHub Releases](https://github.com/TimeLordFang/DawnMeshServer/releases):
+
+```bash
+sha256sum -c SHA256SUMS
+install -m 0755 dawnmesh-server /usr/local/bin/dawnmesh-server
+```
+
+The process needs the environment variables described in `config.example.env` and write access to the parent directory of `DAWNMESH_DATABASE`. LiveKit remains a separate service.
+
+## TURN and network ports
+
+UDP is preferred for real-time voice, with ICE/TCP 7881 as fallback. LiveKit's authenticated TURN service can support networks that block both. TURN/TLS is a Layer 4 protocol and cannot use an Nginx HTTP `location`. Give it a dedicated public port/IP, or use Nginx `stream` SNI routing after checking client SNI behavior. Set `turn.external_tls: true` when Nginx terminates TURN TLS.
+
+## Recovery behavior
+
+- An ordinary member retains their identity for 10 minutes after an unexpected disconnect.
+- A host chooses a 1–60 minute deadline when creating the room; the default is 10 minutes.
+- If the host deadline expires while members remain online, ownership moves to the earliest online member.
+- An entirely empty room is removed 10 minutes after the final disconnect, even when the host selected a longer deadline.
+- Explicit host termination removes the room immediately.
+
+SQLite data lives in the `dawnmesh-data` volume. Back up the database together with `.env` and `livekit.yaml`. Invite codes, E2EE room keys, and chat content are not written to SQLite.
+
+## Security
+
+New LiveKit join tokens start with audio publication disabled. After an authenticated management channel is established, the server applies the current persisted voice policy to the participant. Replaying an old token cannot restore revoked microphone access. Tokens expire after two minutes and API secrets stay server-side.
+
+A six-digit invitation is not strong enough to protect a public service by itself. Generate a high-entropy `DAWNMESH_ACCESS_TOKEN`, restrict database and configuration permissions, and keep images updated.
+
+The management protocol is documented in [`docs/API.md`](docs/API.md). It is versioned as `v1`; the Android client rejects incompatible versions and detects unexpected instance-ID changes.
+
+## Development
+
+```bash
+go test -race ./...
+go vet ./...
+go install golang.org/x/vuln/cmd/govulncheck@v1.8.0
+govulncheck ./...
+```
+
+Pushes to `main` and pull requests run module consistency checks, race-enabled tests, `go vet`, vulnerability scanning, and Linux cross-builds. A `v*` tag publishes release archives, checksums, and a multi-architecture GHCR image. Dependabot checks Go modules, Docker images, and GitHub Actions weekly.
+
+```bash
+git tag -a v0.1.0 -m "DawnMesh Server v0.1.0"
+git push origin v0.1.0
+```
+
+## License
+
+DawnMesh Server is licensed under the [GNU Affero General Public License v3.0](LICENSE) (`AGPL-3.0-only`). If you modify this project and make it available to users over a network, the AGPL requires you to offer those users the corresponding source. LiveKit and other dependencies remain under their respective licenses.
