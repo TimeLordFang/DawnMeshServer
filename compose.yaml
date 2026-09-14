@@ -8,6 +8,10 @@ services:
       - dawnmesh-data:/data
     ports:
       - "127.0.0.1:8080:8080"
+    extra_hosts:
+      # Keep LIVEKIT_URL=http://livekit:7880 working after LiveKit moves to the
+      # host network by resolving the old service name to the Docker host.
+      - "livekit:host-gateway"
     depends_on:
       livekit:
         condition: service_started
@@ -15,17 +19,10 @@ services:
   livekit:
     image: livekit/livekit-server:v1.13.6
     restart: unless-stopped
+    network_mode: host
     command: --config /etc/livekit.yaml
     volumes:
       - ./livekit.yaml:/etc/livekit.yaml:ro
-    ports:
-      - "127.0.0.1:7880:7880/tcp"
-      - "7881:7881/tcp"
-      - "7882:7882/udp"
-      # Enable only when TURN/UDP is configured.
-      # - "3478:3478/udp"
-    expose:
-      - "7880"
 
 volumes:
   dawnmesh-data:

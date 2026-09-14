@@ -26,7 +26,7 @@ The project does not request or renew HTTPS certificates. Put the API and LiveKi
 - Linux `amd64` or `arm64`
 - Docker Engine and Docker Compose, or Go 1.27.1+
 - Public domains for the DawnMesh API and LiveKit signalling
-- Public UDP 7882 and TCP 7881, or equivalent Layer 4 forwarding
+- Public UDP 57882 and TCP 57881, or equivalent Layer 4 forwarding
 - An existing Nginx HTTPS entry point
 
 ## Deploy the container image
@@ -40,7 +40,7 @@ cp livekit.example.yaml livekit.yaml
 ./scripts/init-config.sh
 ```
 
-Edit `.env` and `livekit.yaml`. Their LiveKit API key and secret must match. Set `DAWNMESH_PUBLIC_URL` to the public HTTPS API origin and `LIVEKIT_PUBLIC_URL` to the public `wss://` signalling origin.
+Edit `.env` and `livekit.yaml`. Their LiveKit API key and secret must match. Set `DAWNMESH_PUBLIC_URL` to the public HTTPS API origin and `LIVEKIT_PUBLIC_URL` to the public `wss://` signalling origin. LiveKit uses host networking. Compose maps the `livekit` hostname inside the DawnMesh Server container to the host gateway, so the existing `LIVEKIT_URL=http://livekit:7880` remains valid.
 
 ```bash
 docker compose pull
@@ -62,7 +62,7 @@ Build locally from source with:
 docker compose up -d --build
 ```
 
-Merge the relevant parts of [`deploy/nginx.example.conf`](deploy/nginx.example.conf) into your Nginx configuration. `/api/` must allow WebSocket upgrades. Forward UDP 7882 and TCP 7881 directly when possible. A successful HTTPS health check verifies the control plane only, not the WebRTC media path.
+Merge the relevant parts of [`deploy/nginx.example.conf`](deploy/nginx.example.conf) into your Nginx configuration. `/api/` must allow WebSocket upgrades. Forward UDP 57882 and TCP 57881 directly when possible. A successful HTTPS health check verifies the control plane only, not the WebRTC media path.
 
 Add `DAWNMESH_PUBLIC_URL` in the Android app's network intercom settings and use `DAWNMESH_ACCESS_TOKEN` as the server credential.
 
@@ -97,7 +97,9 @@ The process needs the environment variables described in `config.example.env` an
 
 ## TURN and network ports
 
-UDP is preferred for real-time voice, with ICE/TCP 7881 as fallback. LiveKit's authenticated TURN service can support networks that block both. TURN/TLS is a Layer 4 protocol and cannot use an Nginx HTTP `location`. Give it a dedicated public port/IP, or use Nginx `stream` SNI routing after checking client SNI behavior. Set `turn.external_tls: true` when Nginx terminates TURN TLS.
+The LiveKit container uses host networking and listens on the host's IPv4 and IPv6 wildcard addresses. UDP 57882 is preferred for real-time voice, with ICE/TCP 57881 as fallback; allow both address families through the host firewall and cloud security group. `use_external_ip: true` discovers one public address. To advertise fixed public IPv4 and IPv6 addresses together, set `use_external_ip: false` and `node_ip: "public-IPv4,public-IPv6"`.
+
+LiveKit's authenticated TURN service can support networks that block both UDP and ICE/TCP. TURN/TLS is a Layer 4 protocol and cannot use an Nginx HTTP `location`. Give it a dedicated public port/IP, or use Nginx `stream` SNI routing after checking client SNI behavior. Set `turn.external_tls: true` when Nginx terminates TURN TLS.
 
 ## Recovery behavior
 

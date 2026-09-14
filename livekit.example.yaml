@@ -1,10 +1,14 @@
 port: 7880
 bind_addresses:
   - "0.0.0.0"
+  - "::"
 rtc:
-  tcp_port: 7881
-  udp_port: 7882
+  tcp_port: 57881
+  udp_port: 57882
   use_external_ip: true
+  # To advertise both address families explicitly, disable use_external_ip and
+  # set node_ip to a comma-separated public IPv4 and IPv6 address:
+  # node_ip: "203.0.113.10,2001:db8::10"
 keys:
   replace-with-livekit-api-key: replace-with-at-least-32-random-characters
 logging:
@@ -15,4 +19,3 @@ turn:
   tls_port: 5349
   # domain: turn.example.com
   # external_tls: true
-

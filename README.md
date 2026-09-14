@@ -26,7 +26,7 @@ DawnMesh Server 是「曙光之声」公网对讲模式的自托管控制平面�
 - Linux `amd64` 或 `arm64` 服务器
 - Docker Engine 与 Docker Compose，或 Go 1.27.1+
 - API 和 LiveKit 信令使用的公网域名
-- UDP 7882 与 TCP 7881 可公网访问，或有等价的四层转发
+- UDP 57882 与 TCP 57881 可公网访问，或有等价的四层转发
 - 已配置的 Nginx HTTPS 入口
 
 ## 使用容器镜像部署
@@ -40,7 +40,7 @@ cp livekit.example.yaml livekit.yaml
 ./scripts/init-config.sh
 ```
 
-编辑 `.env` 和 `livekit.yaml`。两处 LiveKit API key/secret 必须一致。将 `DAWNMESH_PUBLIC_URL` 设为 API 的 HTTPS 地址，将 `LIVEKIT_PUBLIC_URL` 设为 LiveKit 信令的公网 `wss://` 地址。
+编辑 `.env` 和 `livekit.yaml`。两处 LiveKit API key/secret 必须一致。将 `DAWNMESH_PUBLIC_URL` 设为 API 的 HTTPS 地址，将 `LIVEKIT_PUBLIC_URL` 设为 LiveKit 信令的公网 `wss://` 地址。LiveKit 使用 host network；Compose 会把 DawnMesh Server 容器内的 `livekit` 主机名映射到宿主机网关，因此原有的 `LIVEKIT_URL=http://livekit:7880` 可以继续使用。
 
 ```bash
 docker compose pull
@@ -62,7 +62,7 @@ DAWNMESH_IMAGE=ghcr.io/timelordfang/dawnmeshserver:1.0.0
 docker compose up -d --build
 ```
 
-将 [`deploy/nginx.example.conf`](deploy/nginx.example.conf) 中需要的部分加入现有 Nginx 配置。`/api/` 必须允许 WebSocket 升级，因为入房验证和房间管理事件使用该连接。优先直通 UDP 7882 和 TCP 7881；HTTPS 健康检查成功只代表控制平面可用，不代表 WebRTC 媒体链路可用。
+将 [`deploy/nginx.example.conf`](deploy/nginx.example.conf) 中需要的部分加入现有 Nginx 配置。`/api/` 必须允许 WebSocket 升级，因为入房验证和房间管理事件使用该连接。优先直通 UDP 57882 和 TCP 57881；HTTPS 健康检查成功只代表控制平面可用，不代表 WebRTC 媒体链路可用。
 
 最后在 Android 客户端的网络对讲页面添加 `DAWNMESH_PUBLIC_URL`，并输入 `DAWNMESH_ACCESS_TOKEN`。
 
@@ -97,7 +97,9 @@ install -m 0755 dawnmesh-server /usr/local/bin/dawnmesh-server
 
 ## TURN 与网络端口
 
-实时语音优先使用 UDP，ICE/TCP 7881 是回退链路。如果需要兼容同时封锁 UDP 和 ICE/TCP 的网络，可以开启 LiveKit 的认证 TURN。TURN/TLS 是四层协议，不能放进 Nginx 的 HTTP `location`；可使用独立公网端口/IP，或在确认客户端 SNI 行为后使用 Nginx `stream` 分流。由 Nginx 终止 TURN TLS 时，需要在 LiveKit 中设置 `turn.external_tls: true`。
+LiveKit 容器使用 host network，直接监听宿主机的 IPv4 与 IPv6 通配地址。实时语音优先使用 UDP 57882，ICE/TCP 57881 是回退链路；宿主机防火墙和云安全组必须同时为所需地址族放行。`use_external_ip: true` 会自动探测一个公网地址；需要同时公布固定公网 IPv4 和 IPv6 时，改为 `use_external_ip: false`，并设置 `node_ip: "公网IPv4,公网IPv6"`。
+
+如果需要兼容同时封锁 UDP 和 ICE/TCP 的网络，可以开启 LiveKit 的认证 TURN。TURN/TLS 是四层协议，不能放进 Nginx 的 HTTP `location`；可使用独立公网端口/IP，或在确认客户端 SNI 行为后使用 Nginx `stream` 分流。由 Nginx 终止 TURN TLS 时，需要在 LiveKit 中设置 `turn.external_tls: true`。
 
 ## 状态恢复规则
 
