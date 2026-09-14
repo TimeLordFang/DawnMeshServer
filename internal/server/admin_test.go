@@ -34,6 +34,12 @@ func TestAdminUIIsEmbeddedAndAPIUsesSeparateCredential(t *testing.T) {
 		t.Fatalf("embedded asset status=%d", asset.Code)
 	}
 
+	styles := httptest.NewRecorder()
+	handler.ServeHTTP(styles, httptest.NewRequest(http.MethodGet, "/admin/app.css", nil))
+	if styles.Code != http.StatusOK || !strings.Contains(styles.Body.String(), "[hidden] { display: none !important; }") {
+		t.Fatalf("embedded stylesheet does not preserve hidden view state: status=%d", styles.Code)
+	}
+
 	for name, token := range map[string]string{
 		"missing token": "",
 		"client token":  "server-access",
