@@ -290,14 +290,25 @@
     return bytes;
   }
 
-  async function pbkdf2(password, salt, length) {
-    const key = await subtle.importKey("raw", password, "PBKDF2", false, ["deriveBits"]);
-    return new Uint8Array(await subtle.deriveBits({ name: "PBKDF2", hash: "SHA-256", salt, iterations: 1 }, key, length * 8));
+  // scrypt uses PBKDF2-HMAC-SHA256 with exactly one iteration for both of its
+  // outer derivations. Building that one iteration from HMAC avoids mobile
+  // WebCrypto implementations that reject a large PBKDF2 deriveBits request.
+  async function pbkdf2OneIteration(password, salt, length) {
+    const key = await subtle.importKey("raw", password, { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+    const output = new Uint8Array(length);
+    const blocks = Math.ceil(length / 32);
+    for (let block = 1; block <= blocks; block += 1) {
+      const suffix = new Uint8Array(4);
+      new DataView(suffix.buffer).setUint32(0, block, false);
+      const digest = new Uint8Array(await subtle.sign("HMAC", key, concat(salt, suffix)));
+      output.set(digest.subarray(0, Math.min(32, length - (block - 1) * 32)), (block - 1) * 32);
+    }
+    return output;
   }
 
   async function scrypt(password, salt, n = 16384, r = 8, p = 1, length = 40) {
     if ((n & (n - 1)) !== 0 || n <= 1 || p !== 1) throw new Error("unsupported scrypt parameters");
-    const initial = await pbkdf2(password, salt, p * 128 * r);
+    const initial = await pbkdf2OneIteration(password, salt, p * 128 * r);
     let x = bytesToLittleWords(initial);
     const blockWords = 32 * r;
     const memory = new Uint32Array(n * blockWords);
@@ -312,7 +323,7 @@
       x = blockMix(x, r);
     }
     memory.fill(0);
-    return pbkdf2(password, littleWordsToBytes(x), length);
+    return pbkdf2OneIteration(password, littleWordsToBytes(x), length);
   }
 
   async function deriveInviteScalar(code) {

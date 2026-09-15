@@ -39,7 +39,19 @@ function toast(message, duration = 3600) {
 
 function errorText(error) {
   if (error?.name === "NotAllowedError") return "浏览器没有获得麦克风权限";
+  if (error?.name === "OperationError") return "浏览器加密接口执行失败，请升级浏览器后重试";
   return error?.message || String(error) || "操作失败";
+}
+
+async function operation(stage, callback) {
+  try {
+    return await callback();
+  } catch (cause) {
+    const wrapped = new Error(`${stage}失败：${errorText(cause)}`);
+    wrapped.cause = cause;
+    console.error(`[DawnMesh client] ${stage}`, cause);
+    throw wrapped;
+  }
 }
 
 function setBusy(button, busy, label = "处理中…") {
@@ -186,7 +198,8 @@ async function createRoom(form) {
   try {
     const inviteCode = randomInvite();
     const roomKey = crypto.getRandomValues(new Uint8Array(32));
-    const inviteScalar = await DawnCrypto.deriveInviteScalar(inviteCode);
+    const inviteScalar = await operation("邀请码密钥派生", () => DawnCrypto.deriveInviteScalar(inviteCode));
+    const chatCipher = await operation("聊天密钥初始化", () => DawnCrypto.ChatCipher.create(roomKey));
     setBusy(button, true, "正在创建…");
     const body = {
       name: $("#room-name-input").value.trim(),
@@ -196,9 +209,9 @@ async function createRoom(form) {
       hostDisconnectTimeoutMinutes: Number($("#host-timeout-input").value),
     };
     if ($("#allow-monitoring").checked) body.monitoringKey = DawnCrypto.base64Url(roomKey);
-    const grant = await api("/api/v1/rooms", { method: "POST", body: JSON.stringify(body) });
+    const grant = await operation("服务端创建房间", () => api("/api/v1/rooms", { method: "POST", body: JSON.stringify(body) }));
     $("#create-dialog").close();
-    await enterRoom({ grant, roomKey, inviteCode, inviteScalar });
+    await enterRoom({ grant, roomKey, inviteCode, inviteScalar, chatCipher });
   } catch (cause) {
     error.textContent = errorText(cause);
   } finally {
@@ -211,7 +224,7 @@ async function completeAdmission(roomId, inviteCode) {
     method: "POST",
     body: JSON.stringify({ nickname: state.nickname, deviceId: state.deviceId }),
   });
-  const scalar = await DawnCrypto.deriveInviteScalar(inviteCode);
+  const scalar = await operation("邀请码密钥派生", () => DawnCrypto.deriveInviteScalar(inviteCode));
   const pake = new DawnCrypto.Spake2({ isA: true, passwordScalar: scalar });
   const socket = openEventSocket(admission.eventsUrl, admission.resumeToken);
   await waitForOpen(socket);
@@ -234,13 +247,13 @@ async function completeAdmission(roomId, inviteCode) {
           const packet = DawnCrypto.fromBase64(event.body);
           if (packet.length !== 97) throw new Error("邀请码验证响应无效");
           const identities = pakeIdentities(roomId, admission.admissionId, admission.memberId);
-          keys = await pake.finish(packet.slice(0, 65), identities[0], identities[1]);
+          keys = await operation("邀请码验证", () => pake.finish(packet.slice(0, 65), identities[0], identities[1]));
           if (!DawnCrypto.timingSafeEqual(packet.slice(65), keys.confirmB)) throw new Error("邀请码不正确");
           socket.send(JSON.stringify({ type: "pake_confirm", admissionId: admission.admissionId, body: DawnCrypto.base64(keys.confirmA) }));
         } else if (event.type === "pake_key") {
           if (!keys) throw new Error("邀请码验证状态无效");
           const wrappingKey = await DawnCrypto.dawnHkdf(keys.sharedKey, "DawnMesh internet room key wrapping v1");
-          const roomKey = await DawnCrypto.aesDecrypt(wrappingKey, DawnCrypto.fromBase64(event.body), utf8.encode(admission.admissionId));
+          const roomKey = await operation("房间密钥解密", () => DawnCrypto.aesDecrypt(wrappingKey, DawnCrypto.fromBase64(event.body), utf8.encode(admission.admissionId)));
           if (roomKey.length !== 32) throw new Error("房间密钥无效");
           finish(null, { grant: event.connection, roomKey, inviteCode });
         } else if (event.type === "admission_rejected" || event.type === "error") {
@@ -254,8 +267,9 @@ async function completeAdmission(roomId, inviteCode) {
   });
 }
 
-async function enterRoom({ grant, roomKey, inviteCode, inviteScalar }) {
+async function enterRoom({ grant, roomKey, inviteCode, inviteScalar, chatCipher = null }) {
   window.clearInterval(state.roomsTimer);
+  const roomChatCipher = chatCipher || await operation("聊天密钥初始化", () => DawnCrypto.ChatCipher.create(roomKey));
   state.active = {
     grant,
     roomKey,
@@ -274,7 +288,7 @@ async function enterRoom({ grant, roomKey, inviteCode, inviteScalar }) {
     speaking: new Set(),
     messages: [],
     hostAdmissions: new Map(),
-    chatCipher: await DawnCrypto.ChatCipher.create(roomKey),
+    chatCipher: roomChatCipher,
     socket: null,
     room: null,
     worker: null,
@@ -406,6 +420,9 @@ async function connectMedia(grant) {
   const active = state.active;
   if (!active || active.leaving) return;
   if (!window.LivekitClient || typeof Worker === "undefined") throw new Error("当前浏览器不支持 WebRTC 端到端加密");
+  if (typeof LivekitClient.isE2EESupported === "function" && !LivekitClient.isE2EESupported()) {
+    throw new Error("当前浏览器不支持 LiveKit 端到端加密，请升级 Chrome、Edge、Firefox 或 Safari");
+  }
   if (active.room) {
     active.intentionalMediaDisconnects ||= new WeakSet();
     active.intentionalMediaDisconnects.add(active.room);
@@ -458,9 +475,9 @@ async function connectMedia(grant) {
   room.on(LivekitClient.RoomEvent.DataReceived, (payload, participant, _kind, topic) => {
     if (topic === "dawnmesh.chat.v1" && participant) receiveChat(payload, participant).catch(() => {});
   });
-  await keyProvider.setKey(DawnCrypto.base64Url(active.roomKey));
-  await room.setE2EEEnabled(true);
-  await room.connect(grant.livekitUrl, grant.livekitToken, { autoSubscribe: true });
+  await operation("LiveKit 加密密钥初始化", () => keyProvider.setKey(DawnCrypto.base64Url(active.roomKey)));
+  await operation("LiveKit 端到端加密启用", () => room.setE2EEEnabled(true));
+  await operation("LiveKit 媒体连接", () => room.connect(grant.livekitUrl, grant.livekitToken, { autoSubscribe: true }));
   sendEvent({ type: "media_ready", memberId: active.memberId });
   await applyMicrophone(currentMicWanted());
   setRoomStatus("connected", "连接安全 · 端到端加密");
