@@ -2,6 +2,8 @@
 
 All client endpoints except `GET /healthz` require the optional deployment access credential as `Authorization: Bearer <token>` when `DAWNMESH_ACCESS_TOKEN` is configured. Member management endpoints also require the current rotating token in `X-Dawn-Session`. Admin endpoints require the separate `DAWNMESH_ADMIN_TOKEN`; the client access token is never accepted for them.
 
+`GET /api/v1/media-health` verifies that DawnMesh Server can reach and authenticate to the configured LiveKit control API. It returns `200` with `{"status":"ok"}` or `503` with a sanitized error. It does not test the browser-facing WSS endpoint or ICE media ports.
+
 JSON responses use UTF-8. Request bodies are limited to 64 KiB. Errors have the form `{"error":"message"}`.
 
 ## Discovery and rooms

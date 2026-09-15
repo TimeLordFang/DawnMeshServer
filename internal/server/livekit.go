@@ -67,3 +67,11 @@ func (m *liveKitManager) deleteRoom(ctx context.Context, room string) error {
 	_, err := m.rooms.DeleteRoom(ctx, &livekit.DeleteRoomRequest{Room: room})
 	return err
 }
+
+func (m *liveKitManager) health(ctx context.Context) error {
+	if m.rooms == nil {
+		return nil
+	}
+	_, err := m.rooms.ListRooms(ctx, &livekit.ListRoomsRequest{})
+	return err
+}

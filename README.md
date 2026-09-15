@@ -46,7 +46,10 @@ cp livekit.example.yaml livekit.yaml
 docker compose pull
 docker compose up -d --no-build
 curl -fsS https://talk.example.com/healthz
+curl -fsS -H 'Authorization: Bearer <DAWNMESH_ACCESS_TOKEN>' https://talk.example.com/api/v1/media-health
 ```
+
+`/healthz` 只确认 DawnMesh Server 进程可用；`/api/v1/media-health` 还会使用当前 API key/secret 请求 LiveKit 控制接口。后者返回 `503` 时，检查 `docker compose logs livekit`、`LIVEKIT_URL`，并确认 `.env` 与 `livekit.yaml` 中的 key/secret 完全一致。若它返回 `200` 但网页仍提示媒体失败，问题位于公网媒体链路：先检查 `LIVEKIT_PUBLIC_URL` 对应域名是否把 WSS 转发到 `127.0.0.1:7880`，再检查云安全组和宿主机防火墙是否放行 UDP 57882、TCP 57881。网页会保留最近一次详细诊断，不会再被通用的“媒体连接中断”覆盖。
 
 默认镜像是 `ghcr.io/timelordfang/dawnmeshserver:latest`。如需固定版本，在 `.env` 中设置：
 

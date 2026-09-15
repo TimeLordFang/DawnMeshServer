@@ -56,6 +56,40 @@ async function operation(stage, callback) {
   }
 }
 
+function mediaFailureText(error) {
+  const parts = [];
+  for (let current = error; current && !parts.includes(current.message); current = current.cause) {
+    if (current.message) parts.push(current.message);
+  }
+  const detail = parts.join(" · ");
+  const normalized = detail.toLowerCase();
+  if (/401|403|unauthor|forbidden|jwt|token/.test(normalized)) {
+    return "LiveKit 媒体鉴权失败：请核对 .env 与 livekit.yaml 的 API key/secret";
+  }
+  if (/signal|websocket|failed to fetch|server unreachable|networkerror/.test(normalized)) {
+    return "LiveKit 信令连接失败：请检查 LIVEKIT_PUBLIC_URL、证书及 7880 的 WSS 反代";
+  }
+  if (/peerconnection|peer connection|pc connection|media.?connect|ice|candidate|dtls|connection timeout|timed out|could not establish/.test(normalized)) {
+    return "LiveKit ICE 连接失败：请检查公布的公网 IP、UDP 57882 和 TCP 57881";
+  }
+  if (/e2ee|encrypt|key provider|worker/.test(normalized)) {
+    return "LiveKit 端到端加密初始化失败：请检查浏览器 E2EE 和 Worker 支持";
+  }
+  return `LiveKit 媒体连接失败：${detail || "未知错误"}`;
+}
+
+async function diagnoseMediaFailure(error) {
+  const browserDiagnosis = mediaFailureText(error);
+  try {
+    await api("/api/v1/media-health");
+  } catch (cause) {
+    if (cause?.status === 503) {
+      return "LiveKit 服务端连接失败：请检查 LIVEKIT_URL、LiveKit 进程及两处 API key/secret";
+    }
+  }
+  return browserDiagnosis;
+}
+
 function setBusy(button, busy, label = "处理中…") {
   if (!button.dataset.label) button.dataset.label = button.textContent;
   button.disabled = busy;
@@ -411,6 +445,7 @@ async function enterRoom({ grant, roomKey, inviteCode, inviteScalar, chatCipher 
     mediaReconnectTimer: null,
     mediaReconnectAttempts: 0,
     mediaReconnectStarted: 0,
+    lastMediaError: "",
     fullReconnectTimer: null,
     fullReconnectStarted: 0,
     inviteVisible: false,
@@ -429,8 +464,10 @@ async function enterRoom({ grant, roomKey, inviteCode, inviteScalar, chatCipher 
   try {
     await connectMedia(grant);
   } catch (cause) {
-    toast(errorText(cause));
-    scheduleMediaReconnect("媒体连接未完成，正在自动恢复");
+    const diagnosis = await diagnoseMediaFailure(cause);
+    state.active.lastMediaError = diagnosis;
+    toast(diagnosis, 8000);
+    scheduleMediaReconnect(diagnosis);
   }
   await acquireWakeLock();
 }
@@ -617,6 +654,7 @@ async function connectMedia(grant) {
   await operation("LiveKit 媒体连接", () => room.connect(grant.livekitUrl, grant.livekitToken, { autoSubscribe: true }));
   if (active.socket?.readyState === WebSocket.OPEN) sendEvent({ type: "media_ready", memberId: active.memberId });
   await applyMicrophone(currentMicWanted());
+  active.lastMediaError = "";
   updateConnectionStatus(active);
 }
 
@@ -661,7 +699,7 @@ function updateConnectionStatus(active = state.active) {
   } else if (!managementReady) {
     setRoomStatus("reconnecting", "管理通道中断，正在自动恢复");
   } else {
-    setRoomStatus("reconnecting", "媒体连接中断，正在自动恢复");
+    setRoomStatus("reconnecting", active.lastMediaError || "媒体连接中断，正在自动恢复");
   }
 }
 
@@ -735,13 +773,15 @@ function scheduleMediaReconnect(statusLabel = "媒体连接中断，正在自动
       await connectMedia(grant);
       active.mediaReconnectAttempts = 0;
       active.mediaReconnectStarted = 0;
+      active.lastMediaError = "";
     } catch (cause) {
       console.warn("[DawnMesh client] media recovery failed", cause);
       if (cause?.status === 401 || cause?.status === 410) {
         scheduleFullReconnect("会话已失效，正在恢复房间连接");
       } else {
         const seconds = Math.ceil(delays[Math.min(active.mediaReconnectAttempts, delays.length - 1)] / 1000);
-        scheduleMediaReconnect(`媒体连接恢复失败，${seconds} 秒后重试`);
+        active.lastMediaError = await diagnoseMediaFailure(cause);
+        scheduleMediaReconnect(`${active.lastMediaError}；${seconds} 秒后重试`);
       }
     }
   }, delay);

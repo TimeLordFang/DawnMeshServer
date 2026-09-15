@@ -46,7 +46,10 @@ Edit `.env` and `livekit.yaml`. Their LiveKit API key and secret must match. Set
 docker compose pull
 docker compose up -d --no-build
 curl -fsS https://talk.example.com/healthz
+curl -fsS -H 'Authorization: Bearer <DAWNMESH_ACCESS_TOKEN>' https://talk.example.com/api/v1/media-health
 ```
+
+`/healthz` only checks the DawnMesh Server process. `/api/v1/media-health` also calls the LiveKit control API with the configured API key and secret. A `503` response points to the LiveKit process, `LIVEKIT_URL`, or mismatched credentials between `.env` and `livekit.yaml`. If it returns `200` while the browser still reports a media failure, check the public path: `LIVEKIT_PUBLIC_URL` must reach the LiveKit WSS endpoint on `127.0.0.1:7880`, and the host and cloud firewalls must allow UDP 57882 and TCP 57881. The web client now keeps the latest detailed diagnosis visible instead of replacing it with a generic media-disconnected message.
 
 The default image is `ghcr.io/timelordfang/dawnmeshserver:latest`. Pin a version through `.env` when required:
 

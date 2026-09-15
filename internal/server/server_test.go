@@ -13,6 +13,40 @@ import (
 	"github.com/TimeLordFang/DawnMeshServer/internal/config"
 )
 
+func TestMediaHealthReportsUnavailableLiveKit(t *testing.T) {
+	server := testServer(t)
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/media-health", nil)
+	request.Header.Set("Authorization", "Bearer server-access")
+	response := httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, request)
+	if response.Code != http.StatusServiceUnavailable || !strings.Contains(response.Body.String(), "无法连接 LiveKit") {
+		t.Fatalf("media health status=%d body=%s", response.Code, response.Body.String())
+	}
+}
+
+func TestMediaHealthReportsAvailableLiveKit(t *testing.T) {
+	liveKit := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/twirp/livekit.RoomService/ListRooms" {
+			t.Errorf("unexpected LiveKit path %q", r.URL.Path)
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/protobuf")
+		_, _ = w.Write(nil)
+	}))
+	defer liveKit.Close()
+
+	server := testServer(t)
+	server.livekit = newLiveKitManager(liveKit.URL, "wss://rtc.example.test", "test-key", "test-secret-that-is-at-least-thirty-two-characters")
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/media-health", nil)
+	request.Header.Set("Authorization", "Bearer server-access")
+	response := httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, request)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"status":"ok"`) {
+		t.Fatalf("media health status=%d body=%s", response.Code, response.Body.String())
+	}
+}
+
 func testServer(t *testing.T) *Server {
 	t.Helper()
 	server, err := New(config.Config{

@@ -89,6 +89,7 @@ func (s *Server) Handler() http.Handler {
 		writeJSON(w, http.StatusOK, map[string]any{"status": "ok"})
 	})
 	mux.HandleFunc("GET /api/v1/info", s.withAccess(s.info))
+	mux.HandleFunc("GET /api/v1/media-health", s.withAccess(s.mediaHealth))
 	mux.HandleFunc("GET /api/v1/rooms", s.withAccess(s.listRooms))
 	mux.HandleFunc("POST /api/v1/rooms", s.withAccess(s.createRoom))
 	mux.HandleFunc("POST /api/v1/rooms/{room}/admissions", s.withAccess(s.createAdmission))
@@ -189,6 +190,17 @@ func (s *Server) withSession(next func(http.ResponseWriter, *http.Request, *Memb
 
 func (s *Server) info(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"instanceId": s.cfg.InstanceID, "name": s.cfg.InstanceName, "protocolVersion": 1, "maxRoomParticipants": s.cfg.MaximumParticipants, "adminListeningSupported": s.cfg.AdminToken != ""})
+}
+
+func (s *Server) mediaHealth(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
+	defer cancel()
+	if err := s.livekit.health(ctx); err != nil {
+		slog.Warn("LiveKit control endpoint unavailable", "error", err)
+		writeError(w, http.StatusServiceUnavailable, "DawnMesh Server 无法连接 LiveKit 控制接口")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"status": "ok"})
 }
 
 func (s *Server) listRooms(w http.ResponseWriter, _ *http.Request) {
