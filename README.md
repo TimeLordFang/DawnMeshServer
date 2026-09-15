@@ -18,7 +18,7 @@ DawnMesh Server 是「曙光之声」公网对讲模式的自托管控制平面�
 - 房主创建房间时可设置 1–60 分钟的最大断线保留时间
 - 房主超时后自动转让给最早在线成员；空房在最后一人离线 10 分钟后清理
 - SQLite 持久化房间控制状态；音视频媒体由 LiveKit 处理
-- 单二进制内置管理后台，可查看房间和成员状态、改名、管理麦克风及解散房间
+- 单二进制内置 `/client/` 网页对讲客户端和 `/admin/` 管理后台
 - 房主授权后，管理员可在后台通过端到端加密的只听连接实时收听；房内会持续显示监听状态
 
 ## 部署要求
@@ -65,6 +65,25 @@ docker compose up -d --build
 将 [`deploy/nginx.example.conf`](deploy/nginx.example.conf) 中需要的部分加入现有 Nginx 配置。`/api/` 必须允许 WebSocket 升级，因为入房验证和房间管理事件使用该连接。优先直通 UDP 57882 和 TCP 57881；HTTPS 健康检查成功只代表控制平面可用，不代表 WebRTC 媒体链路可用。
 
 最后在 Android 客户端的网络对讲页面添加 `DAWNMESH_PUBLIC_URL`，并输入 `DAWNMESH_ACCESS_TOKEN`。
+
+## 网页对讲客户端
+
+部署完成后打开 `https://talk.example.com/client/`。网页端使用当前服务器，不需要另外填写服务地址；如果配置了 `DAWNMESH_ACCESS_TOKEN`，首次进入时输入该访问凭证即可。
+
+网页客户端与 Android 公网房使用同一套协议和房间：
+
+- 创建、发现和使用六位邀请码加入房间
+- P-256 SPAKE2 邀请码验证，邀请码不发送给服务器
+- LiveKit WebRTC 语音与 E2EE、加密文字消息
+- 按住说话和自动通话、清晰/平衡/省流三档音质
+- 成员头像、发言状态和稳定的加入顺序
+- 房主改名、成员封麦/开麦、转让房主和解散房间
+- 断网后在十分钟成员保留窗口内自动恢复
+- 响应式桌面和移动端布局
+
+浏览器麦克风和 Web Crypto 要求 HTTPS 安全上下文；`localhost` 仅用于本地开发。Safari、Chrome、Edge、Firefox 对 WebRTC E2EE、音频后台运行和输出设备切换的支持存在差异。移动浏览器进入锁屏或被系统回收后无法提供与 Android 前台服务相同的后台持续性，长时间对讲仍建议使用 Android App。网页端的 WebSocket 凭证通过 `Sec-WebSocket-Protocol` 请求头传递，Nginx 等反向代理不要记录该请求头。
+
+访问凭证只写入当前标签页的 `sessionStorage`，昵称和随机设备标识写入 `localStorage`。邀请码、房间密钥和成员恢复令牌只保存在页面内存中；刷新或关闭页面后不会恢复这些敏感值。
 
 ## 管理后台
 

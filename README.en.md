@@ -18,7 +18,7 @@ The project does not request or renew HTTPS certificates. Put the API and LiveKi
 - Configurable 1–60 minute host disconnect deadline
 - Automatic host transfer and cleanup of empty rooms
 - Persistent control state in SQLite, with media handled by LiveKit
-- An embedded single-binary admin console for room and microphone management
+- Embedded single-binary `/client/` web intercom and `/admin/` administration console
 - Host-authorized live listening through an E2EE, subscribe-only administrator connection, with a visible in-room indicator
 
 ## Requirements
@@ -65,6 +65,18 @@ docker compose up -d --build
 Merge the relevant parts of [`deploy/nginx.example.conf`](deploy/nginx.example.conf) into your Nginx configuration. `/api/` must allow WebSocket upgrades. Forward UDP 57882 and TCP 57881 directly when possible. A successful HTTPS health check verifies the control plane only, not the WebRTC media path.
 
 Add `DAWNMESH_PUBLIC_URL` in the Android app's network intercom settings and use `DAWNMESH_ACCESS_TOKEN` as the server credential.
+
+## Web intercom client
+
+After deployment, open `https://talk.example.com/client/`. The web client uses the server that served the page. Enter `DAWNMESH_ACCESS_TOKEN` on the initial screen when the deployment requires it.
+
+The browser and Android public-room clients share the same protocol and rooms. The web client can create and discover rooms, join with a six-digit invite, use push-to-talk or automatic voice, switch among clarity/balanced/data-saver profiles, exchange encrypted text messages, and show speaking state with stable member avatars. Hosts can rename or end the room, control another member's microphone permission, and transfer ownership. A short network interruption is recovered within the existing ten-minute member retention window.
+
+Invite authentication uses the same scrypt and P-256 SPAKE2 transcript as Android, and the invite never reaches the server. LiveKit media uses the same E2EE room key; chat uses a purpose-separated AES-256-GCM key.
+
+Microphone capture and Web Crypto require an HTTPS secure context (`localhost` is allowed for development). Browser support for WebRTC E2EE, background audio, and output-device selection varies. A mobile browser may suspend or terminate a page after screen lock, so the Android app remains the recommended client for long-running background intercom use. WebSocket credentials are carried in the `Sec-WebSocket-Protocol` request header; configure Nginx and other reverse proxies not to log that header.
+
+The access credential is kept in tab-scoped `sessionStorage`; the nickname and random device identifier are stored in `localStorage`. The invite, room key, and rotating resume token remain in page memory and are discarded on refresh or close.
 
 ## Admin console
 

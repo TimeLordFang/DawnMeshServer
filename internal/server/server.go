@@ -79,6 +79,10 @@ func (s *Server) Handler() http.Handler {
 		http.Redirect(w, r, "/admin/", http.StatusPermanentRedirect)
 	})
 	mux.Handle("GET /admin/", http.StripPrefix("/admin/", adminUIHandler()))
+	mux.HandleFunc("GET /client", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/client/", http.StatusPermanentRedirect)
+	})
+	mux.Handle("GET /client/", http.StripPrefix("/client/", clientUIHandler()))
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"status": "ok"})
 	})
@@ -92,7 +96,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/v1/rooms/{room}/handover", s.withSession(s.handover))
 	mux.HandleFunc("DELETE /api/v1/rooms/{room}/members/{member}", s.withSession(s.leaveMember))
 	mux.HandleFunc("DELETE /api/v1/rooms/{room}", s.withSession(s.endRoom))
-	mux.HandleFunc("GET /api/v1/events", s.withAccess(s.events))
+	mux.HandleFunc("GET /api/v1/events", s.withEventAccess(s.events))
 	mux.HandleFunc("GET /api/v1/admin/overview", s.withAdminAccess(s.adminOverview))
 	mux.HandleFunc("PATCH /api/v1/admin/rooms/{room}", s.withAdminAccess(s.adminRenameRoom))
 	mux.HandleFunc("PUT /api/v1/admin/rooms/{room}/members/{member}/voice-policy", s.withAdminAccess(s.adminVoicePolicy))
@@ -111,6 +115,49 @@ func (s *Server) withAccess(next http.HandlerFunc) http.HandlerFunc {
 		}
 		next(w, r)
 	}
+}
+
+const browserEventProtocol = "dawnmesh-v1"
+
+// Browsers cannot add Authorization or X-Dawn-Session to a WebSocket
+// handshake. The embedded client therefore sends Base64URL credentials as
+// WebSocket subprotocol entries. They remain in the handshake headers instead
+// of entering the request URL. Deployments must avoid logging this header.
+func (s *Server) withEventAccess(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		access := bearer(r.Header.Get("Authorization"))
+		if access == "" {
+			access = browserSocketCredential(r, "dawn-access")
+		}
+		if s.cfg.AccessToken != "" && !constantEqual(access, s.cfg.AccessToken) {
+			writeError(w, http.StatusUnauthorized, "服务器访问凭证无效")
+			return
+		}
+		next(w, r)
+	}
+}
+
+func browserSocketCredential(r *http.Request, name string) string {
+	prefix := name + "."
+	for _, value := range strings.Split(r.Header.Get("Sec-WebSocket-Protocol"), ",") {
+		value = strings.TrimSpace(value)
+		if !strings.HasPrefix(value, prefix) {
+			continue
+		}
+		decoded, err := base64.RawURLEncoding.DecodeString(strings.TrimPrefix(value, prefix))
+		if err != nil || len(decoded) > 512 {
+			return ""
+		}
+		return string(decoded)
+	}
+	return ""
+}
+
+func eventSessionToken(r *http.Request) string {
+	if value := r.Header.Get("X-Dawn-Session"); value != "" {
+		return value
+	}
+	return browserSocketCredential(r, "dawn-session")
 }
 
 func (s *Server) withSession(next func(http.ResponseWriter, *http.Request, *Member)) http.HandlerFunc {
@@ -447,7 +494,7 @@ func (s *Server) endRoom(w http.ResponseWriter, r *http.Request, caller *Member)
 }
 
 func (s *Server) events(w http.ResponseWriter, r *http.Request) {
-	token := r.Header.Get("X-Dawn-Session")
+	token := eventSessionToken(r)
 	hash := tokenHash(token)
 	s.mu.Lock()
 	var member *Member
@@ -471,7 +518,7 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, "会话无效")
 		return
 	}
-	conn, err := websocket.Accept(w, r, nil)
+	conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{Subprotocols: []string{browserEventProtocol}})
 	if err != nil {
 		return
 	}
@@ -980,7 +1027,11 @@ func securityHeaders(next http.Handler) http.Handler {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("X-Frame-Options", "DENY")
 		w.Header().Set("Referrer-Policy", "no-referrer")
-		w.Header().Set("Permissions-Policy", "camera=(), geolocation=(), microphone=()")
+		permissions := "camera=(), geolocation=(), microphone=()"
+		if r.URL.Path == "/client" || strings.HasPrefix(r.URL.Path, "/client/") {
+			permissions = "camera=(), geolocation=(), microphone=(self)"
+		}
+		w.Header().Set("Permissions-Policy", permissions)
 		w.Header().Set("Content-Security-Policy", "default-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'; object-src 'none'; worker-src 'self'; connect-src 'self' https: wss:")
 		w.Header().Set("Cache-Control", "no-store")
 		next.ServeHTTP(w, r)

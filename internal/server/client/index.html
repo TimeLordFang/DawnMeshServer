@@ -1,0 +1,193 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <meta name="theme-color" content="#10162a">
+    <meta name="color-scheme" content="dark">
+    <meta name="robots" content="noindex,nofollow">
+    <title>曙光之声 · 网页对讲</title>
+    <link rel="stylesheet" href="/client/app.css">
+    <script defer src="/client/vendor/livekit-client.umd.js"></script>
+    <script defer src="/client/crypto.js"></script>
+    <script defer src="/client/app.js"></script>
+  </head>
+  <body>
+    <div class="aurora aurora-a"></div>
+    <div class="aurora aurora-b"></div>
+    <div id="remote-audio" hidden></div>
+    <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+
+    <main class="app-shell">
+      <section id="setup-view" class="center-view">
+        <form id="setup-form" class="glass-card setup-card">
+          <div class="brand-mark" aria-hidden="true">D</div>
+          <p class="eyebrow">DAWNMESH WEB CLIENT</p>
+          <h1>曙光之声</h1>
+          <p class="subtitle">直接在浏览器加入公网对讲。服务地址就是当前网页所在的服务器。</p>
+          <label for="nickname-input">昵称</label>
+          <input id="nickname-input" maxlength="32" autocomplete="nickname" required placeholder="例如：探索者">
+          <label for="access-token-input">服务器访问凭证</label>
+          <div class="input-action">
+            <input id="access-token-input" type="password" autocomplete="current-password" placeholder="未配置时留空">
+            <button id="toggle-access-token" class="text-button" type="button">显示</button>
+          </div>
+          <button id="connect-server-button" class="primary-button wide" type="submit">连接服务器</button>
+          <p id="setup-error" class="form-error" role="alert"></p>
+          <p class="privacy-note">访问凭证只保存在当前标签页；昵称和设备标识保存在本浏览器。</p>
+        </form>
+      </section>
+
+      <section id="lobby-view" class="page" hidden>
+        <header class="topbar glass-card">
+          <div class="brand-inline">
+            <div class="brand-mark small" aria-hidden="true">D</div>
+            <div>
+              <p class="eyebrow">曙光之声 · 网页对讲</p>
+              <h1 id="server-name">公网房间</h1>
+            </div>
+          </div>
+          <div class="topbar-actions">
+            <span id="server-state" class="status-pill good"><span></span>已连接</span>
+            <button id="refresh-rooms" class="icon-button" type="button" aria-label="刷新房间" title="刷新房间">↻</button>
+            <button id="change-server" class="ghost-button" type="button">设置</button>
+          </div>
+        </header>
+
+        <section class="lobby-hero">
+          <div>
+            <p class="eyebrow">PUBLIC INTERCOM</p>
+            <h2>随时开口，远近都能听见</h2>
+            <p class="subtitle">支持按住说话和自动通话，聊天与语音均使用房间端到端加密密钥。</p>
+          </div>
+          <button id="open-create-room" class="primary-button" type="button">＋ 创建房间</button>
+        </section>
+
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">ROOMS</p>
+            <h2>可加入的房间</h2>
+          </div>
+          <p id="rooms-updated" class="muted"></p>
+        </div>
+        <section id="room-list" class="room-list" aria-live="polite"></section>
+      </section>
+
+      <section id="room-view" class="page room-page" hidden>
+        <header class="topbar glass-card room-topbar">
+          <button id="leave-room" class="icon-button back" type="button" aria-label="离开房间">←</button>
+          <div class="room-title-block">
+            <div class="title-line">
+              <h1 id="active-room-name">房间</h1>
+              <button id="rename-room" class="mini-button" type="button" hidden>改名</button>
+            </div>
+            <p id="room-connection-state" class="room-status"><span></span>正在连接</p>
+          </div>
+          <button id="resume-audio" class="secondary-button compact" type="button" hidden>启用声音</button>
+        </header>
+
+        <div class="room-layout">
+          <section class="call-column">
+            <article id="invite-card" class="invite-card glass-card" hidden>
+              <div>
+                <p class="eyebrow">房间邀请码</p>
+                <p id="invite-code" class="invite-code">••••••</p>
+              </div>
+              <button id="toggle-invite" class="icon-button" type="button" aria-label="显示邀请码" title="显示邀请码">◉</button>
+            </article>
+
+            <section class="glass-card members-panel">
+              <div class="section-heading compact-heading">
+                <div>
+                  <p class="eyebrow">MEMBERS</p>
+                  <h2>房间成员</h2>
+                </div>
+                <span id="member-count" class="count-badge">0 人</span>
+              </div>
+              <div id="member-grid" class="member-grid"></div>
+            </section>
+
+            <section class="talk-panel">
+              <div id="voice-mode" class="segmented" role="group" aria-label="通话模式">
+                <button data-mode="ptt" class="active" type="button"><span>按住对讲</span><small>松开发送停止</small></button>
+                <button data-mode="auto" type="button"><span>自动通话</span><small>持续检测语音</small></button>
+              </div>
+              <button id="talk-button" class="talk-button" type="button">
+                <span class="talk-rings" aria-hidden="true"></span>
+                <strong id="talk-label">按住说话</strong>
+                <small id="talk-hint">麦克风待机</small>
+              </button>
+              <div class="call-controls">
+                <button id="mute-button" class="control-button" type="button"><span>◌</span><small>静音</small></button>
+                <label class="profile-control">
+                  <span>音质</span>
+                  <select id="audio-profile">
+                    <option value="clarity">清晰 · 32 kbps</option>
+                    <option value="balanced">平衡 · 24 kbps</option>
+                    <option value="data">省流 · 12 kbps</option>
+                  </select>
+                </label>
+                <button id="end-room" class="control-button danger" type="button" hidden><span>×</span><small>解散</small></button>
+              </div>
+              <p id="call-notice" class="call-notice"></p>
+            </section>
+          </section>
+
+          <aside class="glass-card chat-panel">
+            <div class="section-heading compact-heading">
+              <div>
+                <p class="eyebrow">CHAT</p>
+                <h2>文字消息</h2>
+              </div>
+              <span class="secure-badge">端到端加密</span>
+            </div>
+            <div id="chat-list" class="chat-list" aria-live="polite">
+              <p class="empty-chat">还没有消息</p>
+            </div>
+            <form id="chat-form" class="chat-form">
+              <input id="chat-input" maxlength="500" autocomplete="off" placeholder="输入消息…">
+              <button class="primary-button" type="submit">发送</button>
+            </form>
+          </aside>
+        </div>
+      </section>
+    </main>
+
+    <dialog id="create-dialog" class="dialog-card">
+      <form id="create-form" method="dialog">
+        <div class="dialog-heading"><div><p class="eyebrow">NEW ROOM</p><h2>创建公网房间</h2></div><button class="icon-button" value="cancel" aria-label="关闭">×</button></div>
+        <label for="room-name-input">房间名称</label>
+        <input id="room-name-input" maxlength="80" required placeholder="例如：周末骑行小队">
+        <div class="form-grid">
+          <label>人数上限<input id="max-participants-input" type="number" min="2" value="25" required></label>
+          <label>房主断线保留<input id="host-timeout-input" type="number" min="1" max="60" value="10" required><small>分钟，最多 60</small></label>
+        </div>
+        <label id="monitoring-option" class="check-row" hidden><input id="allow-monitoring" type="checkbox"><span><strong>允许管理员实时收听</strong><small>房间内会持续显示收听状态</small></span></label>
+        <p class="dialog-note">创建后会生成六位数字邀请码。邀请码不会发送或保存在服务器。</p>
+        <p id="create-error" class="form-error" role="alert"></p>
+        <div class="dialog-actions"><button class="ghost-button" value="cancel">取消</button><button id="create-room-button" class="primary-button" value="default">创建房间</button></div>
+      </form>
+    </dialog>
+
+    <dialog id="join-dialog" class="dialog-card">
+      <form id="join-form" method="dialog">
+        <input id="join-room-id" type="hidden">
+        <div class="dialog-heading"><div><p class="eyebrow">JOIN ROOM</p><h2 id="join-room-name">加入房间</h2></div><button class="icon-button" value="cancel" aria-label="关闭">×</button></div>
+        <label for="invite-input">六位邀请码</label>
+        <input id="invite-input" class="pin-input" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="one-time-code" required placeholder="000000">
+        <p class="dialog-note">验证在浏览器与房主设备之间完成，服务器不会收到邀请码。</p>
+        <p id="join-error" class="form-error" role="alert"></p>
+        <div class="dialog-actions"><button class="ghost-button" value="cancel">取消</button><button id="join-room-button" class="primary-button" value="default">验证并加入</button></div>
+      </form>
+    </dialog>
+
+    <dialog id="rename-dialog" class="dialog-card small-dialog">
+      <form id="rename-form" method="dialog">
+        <div class="dialog-heading"><h2>修改房间名</h2><button class="icon-button" value="cancel" aria-label="关闭">×</button></div>
+        <input id="rename-input" maxlength="80" required>
+        <p id="rename-error" class="form-error" role="alert"></p>
+        <div class="dialog-actions"><button class="ghost-button" value="cancel">取消</button><button class="primary-button" value="default">保存</button></div>
+      </form>
+    </dialog>
+  </body>
+</html>

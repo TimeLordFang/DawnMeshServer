@@ -28,6 +28,14 @@ Connect to `WSS /api/v1/events` with both authentication headers. The channel se
 
 The PAKE transcript binds the server instance ID, room ID, admission ID, member ID, and both protocol roles. The six-digit invite and random room key remain in clients. Chat payloads use a separate AES-256-GCM key and are opaque to this service.
 
+The embedded `/client/` page uses the same event endpoint. Browser APIs cannot attach arbitrary headers to a WebSocket handshake, so it offers these `Sec-WebSocket-Protocol` values:
+
+- `dawnmesh-v1`
+- `dawn-access.<Base64URL(UTF-8 access token)>` when an access token is configured
+- `dawn-session.<Base64URL(UTF-8 rotating session token)>`
+
+The server negotiates only `dawnmesh-v1`; credential entries are authenticated before the upgrade. This keeps credentials out of the URL and preserves the existing header-based Android protocol. Reverse proxies must not log `Sec-WebSocket-Protocol`, because the browser credentials are carried in that header.
+
 ## Connection grant
 
 Create, completed admission, and resume responses return:

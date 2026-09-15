@@ -26,6 +26,14 @@ jobs:
       - name: Test
         run: go test -race ./...
 
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+
+      - name: Test browser cryptography compatibility
+        run: node webtests/client_crypto_test.mjs
+
       - name: Run go vet
         run: go vet ./...
 
