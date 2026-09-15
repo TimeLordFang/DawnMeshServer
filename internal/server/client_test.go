@@ -48,6 +48,39 @@ func TestClientUIIsEmbeddedAndOnlyClientMayUseMicrophone(t *testing.T) {
 	}
 }
 
+func TestBrowserClientUsesCrossPlatformChatEncryption(t *testing.T) {
+	server := testServer(t)
+	response := httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/client/app.js", nil))
+	if response.Code != http.StatusOK {
+		t.Fatalf("client app status=%d", response.Code)
+	}
+	script := response.Body.String()
+	if !strings.Contains(script, "e2ee: { keyProvider, worker }") {
+		t.Fatal("browser client must keep LiveKit E2EE limited to media for mobile chat compatibility")
+	}
+	if strings.Contains(script, "encryption: { keyProvider, worker }") {
+		t.Fatal("browser client enables LiveKit data-channel encryption that mobile clients cannot decode")
+	}
+	cryptoResponse := httptest.NewRecorder()
+	server.Handler().ServeHTTP(cryptoResponse, httptest.NewRequest(http.MethodGet, "/client/crypto.js", nil))
+	if cryptoResponse.Code != http.StatusOK {
+		t.Fatalf("client crypto status=%d", cryptoResponse.Code)
+	}
+	protocolSource := script + cryptoResponse.Body.String()
+	for _, protocolPart := range []string{
+		"DawnMesh internet chat v1",
+		"dawnmesh.chat.v1\\0${senderId}",
+		"dawnmesh.chat.v1\\0${active.memberId}",
+		"topic: \"dawnmesh.chat.v1\"",
+		"reliable: true",
+	} {
+		if !strings.Contains(protocolSource, protocolPart) {
+			t.Fatalf("browser chat protocol is missing %q", protocolPart)
+		}
+	}
+}
+
 func TestBrowserWebSocketSubprotocolAuthenticatesWithoutURLCredentials(t *testing.T) {
 	server := testServer(t)
 	httpServer := httptest.NewServer(server.Handler())

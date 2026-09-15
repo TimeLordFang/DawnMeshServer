@@ -116,6 +116,8 @@ The LiveKit container uses host networking and listens on the host's IPv4 and IP
 
 LiveKit's authenticated TURN service can support networks that block both UDP and ICE/TCP. TURN/TLS is a Layer 4 protocol and cannot use an Nginx HTTP `location`. Give it a dedicated public port/IP, or use Nginx `stream` SNI routing after checking client SNI behavior. Set `turn.external_tls: true` when Nginx terminates TURN TLS.
 
+When Nginx and LiveKit run on the same host, they cannot both bind TCP 57881 and UDP 57882. Let host-networked LiveKit bind those ports directly and allow them through the firewall. When Nginx runs on a separate public gateway, its `stream` proxy may forward those ports to LiveKit's private address, but LiveKit must advertise the gateway's public IP: set `use_external_ip: false` and set `node_ip` accordingly. The startup log's `nodeIP` or `using external IPs` value must be an address the browser can actually reach. Investigate NAT hairpinning and port mappings before enabling `skip_external_ip_validation` for a `could not validate external IP` warning.
+
 ## Recovery behavior
 
 - An ordinary member retains their identity for 10 minutes after an unexpected disconnect.

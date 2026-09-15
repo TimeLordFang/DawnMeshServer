@@ -1,6 +1,6 @@
 await import("../internal/server/client/crypto.js");
 
-const { Spake2, deriveInviteScalar, toHex } = globalThis.DawnCrypto;
+const { Spake2, aesEncrypt, dawnHkdf, deriveInviteScalar, hexBytes, toHex } = globalThis.DawnCrypto;
 const scalar = (value) => BigInt(`0x${value}`);
 const password = scalar("2ee57912099d31560b3a44b1184b9b4866e904c49d12ac5042c97dca461b1a5f");
 const client = new Spake2({
@@ -29,6 +29,21 @@ if (toHex(hostKeys.confirmB) !== "d3e2e547f1ae04f2dbdbf0fc4b79f8ecff2dff314b5d32
 const inviteScalar = await deriveInviteScalar("012345");
 if (inviteScalar !== BigInt("0x933ac63964a94dea77a765e8e855a4e1829738cb0842f10dc0098a4af0bb4cfdc4fa8ed848c662dd")) {
   throw new Error("scrypt invite derivation mismatch");
+}
+
+const chatRoomKey = Uint8Array.from({ length: 32 }, (_, index) => index);
+const chatKey = await dawnHkdf(chatRoomKey, "DawnMesh internet chat v1");
+if (toHex(chatKey) !== "2da8c6292bcc34738e20f2ba72dfb573f135e1911187e0de19152e6d89dda59b") {
+  throw new Error("chat HKDF mismatch");
+}
+const chatPacket = await aesEncrypt(
+  chatKey,
+  new TextEncoder().encode('{"id":"1","senderId":"member-test","senderName":"Web","text":"hello","sentAt":1}'),
+  new TextEncoder().encode("dawnmesh.chat.v1\0member-test"),
+  hexBytes("000102030405060708090a0b"),
+);
+if (toHex(chatPacket) !== "000102030405060708090a0bf3607290423845140aa7a23b191e5f8d4f7f0adde7df856b3cabc2e5de9eb2fe596f91fa502918abf4340b8b5ae3bef74386b45213a36d677df8365ff95b79064d34a5c1ad60dd9b4e3e6b5e5a5d16c44b7ef1fb12c98cc6ad8d01e525f41ef4") {
+  throw new Error("chat AES-GCM packet mismatch");
 }
 
 console.log("DawnMesh browser cryptography vectors passed");

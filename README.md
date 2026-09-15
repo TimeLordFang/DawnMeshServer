@@ -121,6 +121,8 @@ install -m 0755 dawnmesh-server /usr/local/bin/dawnmesh-server
 
 LiveKit 容器使用 host network，直接监听宿主机的 IPv4 与 IPv6 通配地址。实时语音优先使用 UDP 57882，ICE/TCP 57881 是回退链路；宿主机防火墙和云安全组必须同时为所需地址族放行。`use_external_ip: true` 会自动探测一个公网地址；需要同时公布固定公网 IPv4 和 IPv6 时，改为 `use_external_ip: false`，并设置 `node_ip: "公网IPv4,公网IPv6"`。
 
+如果 Nginx 与 LiveKit 在同一台主机，不能让 Nginx `stream` 和 LiveKit 同时监听 57881/57882；让 LiveKit 直接监听并在防火墙放行即可。如果 Nginx 位于另一台公网网关上，`stream` 可以把 TCP 57881 和 UDP 57882 转发到 LiveKit 私网地址，但 LiveKit 必须向客户端公布网关的公网 IP：设置 `use_external_ip: false` 和相应的 `node_ip`。启动日志中的 `nodeIP` 或 `using external IPs` 必须与浏览器实际能够到达的公网地址一致；出现 `could not validate external IP` 时，先检查 NAT 回环和端口映射，必要时再按配置注释启用 `skip_external_ip_validation`。
+
 如果需要兼容同时封锁 UDP 和 ICE/TCP 的网络，可以开启 LiveKit 的认证 TURN。TURN/TLS 是四层协议，不能放进 Nginx 的 HTTP `location`；可使用独立公网端口/IP，或在确认客户端 SNI 行为后使用 Nginx `stream` 分流。由 Nginx 终止 TURN TLS 时，需要在 LiveKit 中设置 `turn.external_tls: true`。
 
 ## 状态恢复规则

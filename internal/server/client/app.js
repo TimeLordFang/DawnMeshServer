@@ -39,8 +39,16 @@ function toast(message, duration = 3600) {
 }
 
 function errorText(error) {
-  if (error?.name === "NotAllowedError") return "浏览器没有获得麦克风权限";
-  if (error?.name === "OperationError") return "浏览器加密接口执行失败，请升级浏览器后重试";
+  const names = new Set();
+  for (let current = error; current; current = current.cause) {
+    if (current.name) names.add(current.name);
+    if (current.cause === current) break;
+  }
+  if (names.has("NotAllowedError") || names.has("SecurityError")) return "浏览器没有获得麦克风权限，请在网站权限中允许麦克风";
+  if (names.has("NotFoundError") || names.has("DevicesNotFoundError")) return "没有找到可用麦克风，请检查系统麦克风权限和输入设备";
+  if (names.has("NotReadableError") || names.has("TrackStartError")) return "麦克风暂时无法读取，请关闭占用麦克风的程序后重试";
+  if (names.has("OverconstrainedError") || names.has("ConstraintNotSatisfiedError")) return "麦克风不支持当前采集参数";
+  if (names.has("OperationError")) return "浏览器加密接口执行失败，请升级浏览器后重试";
   return error?.message || String(error) || "操作失败";
 }
 
@@ -58,11 +66,16 @@ async function operation(stage, callback) {
 
 function mediaFailureText(error) {
   const parts = [];
+  const names = [];
   for (let current = error; current && !parts.includes(current.message); current = current.cause) {
     if (current.message) parts.push(current.message);
+    if (current.name) names.push(current.name);
   }
   const detail = parts.join(" · ");
   const normalized = detail.toLowerCase();
+  if (names.some((name) => name === "NotAllowedError" || name === "SecurityError")) {
+    return "麦克风权限未开启：请允许当前网站使用麦克风后重新加入";
+  }
   if (/401|403|unauthor|forbidden|jwt|token/.test(normalized)) {
     return "LiveKit 媒体鉴权失败：请核对 .env 与 livekit.yaml 的 API key/secret";
   }
@@ -446,6 +459,8 @@ async function enterRoom({ grant, roomKey, inviteCode, inviteScalar, chatCipher 
     mediaReconnectAttempts: 0,
     mediaReconnectStarted: 0,
     lastMediaError: "",
+    microphonePermissionVerified: false,
+    microphoneError: "",
     fullReconnectTimer: null,
     fullReconnectStarted: 0,
     inviteVisible: false,
@@ -587,12 +602,28 @@ function audioOptions() {
   };
 }
 
+async function ensureMicrophonePermission(active) {
+  if (active.microphonePermissionVerified) return;
+  if (!navigator.mediaDevices?.getUserMedia) throw new Error("当前浏览器不支持麦克风采集");
+  const stream = await navigator.mediaDevices.getUserMedia({ audio: audioOptions().capture });
+  for (const track of stream.getTracks()) track.stop();
+  active.microphonePermissionVerified = true;
+}
+
 async function connectMedia(grant) {
   const active = state.active;
   if (!active || active.leaving) return;
   if (!window.LivekitClient || typeof Worker === "undefined") throw new Error("当前浏览器不支持 WebRTC 端到端加密");
   if (typeof LivekitClient.isE2EESupported === "function" && !LivekitClient.isE2EESupported()) {
     throw new Error("当前浏览器不支持 LiveKit 端到端加密，请升级 Chrome、Edge、Firefox 或 Safari");
+  }
+  try {
+    await ensureMicrophonePermission(active);
+    active.microphoneError = "";
+  } catch (cause) {
+    active.microphoneError = errorText(cause);
+    console.warn("[DawnMesh client] microphone unavailable; continuing receive-only", cause);
+    toast(`${active.microphoneError}；已继续以仅收听模式连接`, 8000);
   }
   if (active.room) {
     active.intentionalMediaDisconnects ||= new WeakSet();
@@ -605,7 +636,12 @@ async function connectMedia(grant) {
   const keyProvider = new LivekitClient.ExternalE2EEKeyProvider();
   const options = audioOptions();
   const room = new LivekitClient.Room({
-    encryption: { keyProvider, worker },
+    // The mobile client encrypts LiveKit media itself and uses DawnMesh's
+    // AES-GCM packet format for chat. LiveKit 2.22's `encryption` option also
+    // wraps data-channel packets, which older mobile SDKs cannot unwrap.
+    // Keep LiveKit E2EE on media only so every client sees the same encrypted
+    // dawnmesh.chat.v1 payload.
+    e2ee: { keyProvider, worker },
     adaptiveStream: false,
     dynacast: false,
     audioCaptureDefaults: options.capture,
@@ -617,6 +653,7 @@ async function connectMedia(grant) {
     if (track.kind !== LivekitClient.Track.Kind.Audio) return;
     const element = track.attach();
     element.autoplay = true;
+    element.playsInline = true;
     $("#remote-audio").append(element);
     element.play().catch(() => { $("#resume-audio").hidden = false; });
   });
@@ -643,11 +680,15 @@ async function connectMedia(grant) {
     if (active.intentionalMediaDisconnects?.has(room)) return;
     if (state.active === active && !active.leaving) {
       console.warn("[DawnMesh client] LiveKit media disconnected", reason);
-      scheduleMediaReconnect("媒体连接中断，正在自动恢复");
+      scheduleMediaReconnect(active.lastMediaError || "媒体连接中断，正在自动恢复");
     }
   });
   room.on(LivekitClient.RoomEvent.DataReceived, (payload, participant, _kind, topic) => {
-    if (topic === "dawnmesh.chat.v1" && participant) receiveChat(payload, participant).catch(() => {});
+    if (topic === "dawnmesh.chat.v1" && participant) {
+      receiveChat(payload, participant).catch((cause) => {
+        console.warn("[DawnMesh client] ignored invalid chat packet", cause);
+      });
+    }
   });
   await operation("LiveKit 加密密钥初始化", () => keyProvider.setKey(DawnCrypto.base64Url(active.roomKey)));
   await operation("LiveKit 端到端加密启用", () => room.setE2EEEnabled(true));
@@ -667,11 +708,20 @@ async function applyMicrophone(enabled) {
   const active = state.active;
   if (!active?.room || active.room.state !== "connected") return;
   try {
+    if (enabled) await ensureMicrophonePermission(active);
     const options = audioOptions();
     await active.room.localParticipant.setMicrophoneEnabled(enabled, options.capture, options.publish);
-    if (enabled) await applyAudioBitrate();
+    if (enabled) {
+      active.microphoneError = "";
+      await applyAudioBitrate();
+    }
   } catch (cause) {
-    if (enabled) toast(errorText(cause));
+    if (enabled) {
+      active.ptt = false;
+      active.microphoneError = errorText(cause);
+      console.warn("[DawnMesh client] microphone enable failed", cause);
+      toast(active.microphoneError, 8000);
+    }
   }
   renderTalkState();
 }
@@ -750,7 +800,9 @@ function scheduleFullReconnect(statusLabel = "连接中断，正在自动恢复"
 
 function scheduleMediaReconnect(statusLabel = "媒体连接中断，正在自动恢复") {
   const active = state.active;
-  if (!active || active.leaving || active.mediaReconnectTimer) return;
+  if (!active || active.leaving) return;
+  setRoomStatus("reconnecting", statusLabel);
+  if (active.mediaReconnectTimer) return;
   if (!active.mediaReconnectStarted) active.mediaReconnectStarted = Date.now();
   if (Date.now() - active.mediaReconnectStarted > 10 * 60 * 1000) {
     setRoomStatus("failed", "媒体恢复窗口已结束，请重新加入");
@@ -759,7 +811,6 @@ function scheduleMediaReconnect(statusLabel = "媒体连接中断，正在自动
   const delays = [2000, 4000, 8000, 15000, 30000];
   const delay = delays[Math.min(active.mediaReconnectAttempts, delays.length - 1)];
   active.mediaReconnectAttempts += 1;
-  setRoomStatus("reconnecting", statusLabel);
   active.mediaReconnectTimer = window.setTimeout(async () => {
     active.mediaReconnectTimer = null;
     try {
@@ -898,7 +949,10 @@ function renderTalkState() {
   button.classList.toggle("active", enabled);
   button.classList.toggle("disabled", !active.canSpeak);
   button.disabled = !active.canSpeak;
-  if (!active.canSpeak) {
+  if (active.microphoneError) {
+    $("#talk-label").textContent = "麦克风不可用";
+    $("#talk-hint").textContent = "点击重试，仍可收听房间语音";
+  } else if (!active.canSpeak) {
     $("#talk-label").textContent = "已被房主封麦";
     $("#talk-hint").textContent = "等待房主恢复发言";
   } else if (active.voiceMode === "auto") {
@@ -910,7 +964,10 @@ function renderTalkState() {
   }
   $("#mute-button").classList.toggle("active", active.muted);
   $("#mute-button").querySelector("small").textContent = active.muted ? "取消静音" : "静音";
-  $("#call-notice").textContent = active.summary.adminListening ? "服务器管理员正在实时收听此房间" : "";
+  const notices = [];
+  if (active.microphoneError) notices.push(active.microphoneError);
+  if (active.summary.adminListening) notices.push("服务器管理员正在实时收听此房间");
+  $("#call-notice").textContent = notices.join(" · ");
 }
 
 function renderRoom() {
@@ -926,13 +983,33 @@ function renderRoom() {
   renderChat();
 }
 
+async function resumeRemoteAudio(quiet = false) {
+  const room = state.active?.room;
+  if (!room) return false;
+  try {
+    await room.startAudio();
+    for (const audio of $("#remote-audio").querySelectorAll("audio")) await audio.play();
+    $("#resume-audio").hidden = true;
+    return true;
+  } catch (cause) {
+    $("#resume-audio").hidden = false;
+    if (!quiet) toast(`无法播放房间语音：${errorText(cause)}`, 8000);
+    return false;
+  }
+}
+
 async function receiveChat(packet, participant) {
   const active = state.active;
   if (!active || packet.length < 29) return;
   const senderId = participant.identity;
   const clear = await active.chatCipher.decrypt(packet, utf8.encode(`dawnmesh.chat.v1\0${senderId}`));
   const message = JSON.parse(decoder.decode(clear));
-  if (message.senderId !== senderId || typeof message.text !== "string" || utf8.encode(message.text).length > 1000) return;
+  if (message.senderId !== senderId ||
+      typeof message.id !== "string" || message.id.length > 160 ||
+      typeof message.text !== "string" || utf8.encode(message.text).length > 1000 ||
+      !Number.isSafeInteger(message.sentAt)) {
+    throw new Error("invalid encrypted chat payload");
+  }
   active.messages.push({ ...message, mine: senderId === active.memberId });
   if (active.messages.length > 100) active.messages.shift();
   renderChat();
@@ -1077,9 +1154,7 @@ $("#leave-room").addEventListener("click", () => leaveRoom(false));
 $("#end-room").addEventListener("click", () => leaveRoom(true));
 $("#toggle-invite").addEventListener("click", () => state.active?.inviteVisible ? hideInvite() : revealInvite());
 $("#resume-audio").addEventListener("click", async () => {
-  await state.active?.room?.startAudio();
-  for (const audio of $("#remote-audio").querySelectorAll("audio")) await audio.play().catch(() => {});
-  $("#resume-audio").hidden = true;
+  await resumeRemoteAudio();
 });
 $("#voice-mode").addEventListener("click", async (event) => {
   const button = event.target.closest("button[data-mode]");
@@ -1109,11 +1184,22 @@ async function setPTT(pressed) {
   active.ptt = pressed;
   await applyMicrophone(pressed);
 }
-talk.addEventListener("pointerdown", (event) => { event.preventDefault(); talk.setPointerCapture(event.pointerId); setPTT(true); });
+talk.addEventListener("pointerdown", (event) => {
+  event.preventDefault();
+  talk.setPointerCapture(event.pointerId);
+  void resumeRemoteAudio(true);
+  void setPTT(true);
+});
 talk.addEventListener("pointerup", (event) => { event.preventDefault(); setPTT(false); });
 talk.addEventListener("pointercancel", () => setPTT(false));
 talk.addEventListener("lostpointercapture", () => setPTT(false));
-talk.addEventListener("keydown", (event) => { if ((event.key === " " || event.key === "Enter") && !event.repeat) { event.preventDefault(); setPTT(true); } });
+talk.addEventListener("keydown", (event) => {
+  if ((event.key === " " || event.key === "Enter") && !event.repeat) {
+    event.preventDefault();
+    void resumeRemoteAudio(true);
+    void setPTT(true);
+  }
+});
 talk.addEventListener("keyup", (event) => { if (event.key === " " || event.key === "Enter") { event.preventDefault(); setPTT(false); } });
 
 $("#chat-form").addEventListener("submit", async (event) => {
