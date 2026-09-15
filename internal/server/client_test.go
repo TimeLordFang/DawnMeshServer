@@ -71,9 +71,42 @@ func TestBrowserWebSocketSubprotocolAuthenticatesWithoutURLCredentials(t *testin
 	}
 	var grant struct {
 		ResumeToken string `json:"resumeToken"`
+		MemberID    string `json:"memberId"`
+		Room        struct {
+			ID     string `json:"id"`
+			IsHost bool   `json:"isHost"`
+		} `json:"room"`
 	}
 	if err := json.NewDecoder(createResponse.Body).Decode(&grant); err != nil {
 		t.Fatal(err)
+	}
+	if !grant.Room.IsHost {
+		t.Fatal("create grant did not identify the browser as room host")
+	}
+
+	mediaRequest, err := http.NewRequest(http.MethodPost, httpServer.URL+"/api/v1/rooms/"+grant.Room.ID+"/media-grant", strings.NewReader(`{}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	mediaRequest.Header.Set("Authorization", "Bearer server-access")
+	mediaRequest.Header.Set("X-Dawn-Session", grant.ResumeToken)
+	mediaRequest.Header.Set("Content-Type", "application/json")
+	mediaResponse, err := http.DefaultClient.Do(mediaRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mediaResponse.Body.Close()
+	if mediaResponse.StatusCode != http.StatusOK {
+		t.Fatalf("media grant status=%d", mediaResponse.StatusCode)
+	}
+	var mediaGrant struct {
+		LiveKitToken string `json:"livekitToken"`
+	}
+	if err := json.NewDecoder(mediaResponse.Body).Decode(&mediaGrant); err != nil {
+		t.Fatal(err)
+	}
+	if mediaGrant.LiveKitToken == "" {
+		t.Fatal("media grant did not include a LiveKit token")
 	}
 
 	protocol := func(name, value string) string {
@@ -116,5 +149,41 @@ func TestBrowserWebSocketSubprotocolAuthenticatesWithoutURLCredentials(t *testin
 	}
 	if err == nil || response == nil || response.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("invalid browser access credential status=%v error=%v", response, err)
+	}
+}
+
+func TestEventSocketHeartbeatKeepsConnectionResponsive(t *testing.T) {
+	handlerDone := make(chan struct{})
+	httpServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer close(handlerDone)
+		connection, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			t.Errorf("accept heartbeat socket: %v", err)
+			return
+		}
+		defer connection.CloseNow()
+		readContext := connection.CloseRead(r.Context())
+		keepEventSocketAlive(readContext, connection, "heartbeat-test", 5*time.Millisecond)
+	}))
+	defer httpServer.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	connection, _, err := websocket.Dial(ctx, "ws"+strings.TrimPrefix(httpServer.URL, "http"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	readContext := connection.CloseRead(ctx)
+	time.Sleep(30 * time.Millisecond)
+	if err := connection.Ping(readContext); err != nil {
+		t.Fatalf("connection stopped responding after server heartbeats: %v", err)
+	}
+	if err := connection.Close(websocket.StatusNormalClosure, "done"); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-handlerDone:
+	case <-ctx.Done():
+		t.Fatal("heartbeat handler did not stop after client close")
 	}
 }

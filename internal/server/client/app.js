@@ -49,6 +49,7 @@ async function operation(stage, callback) {
   } catch (cause) {
     const wrapped = new Error(`${stage}失败：${errorText(cause)}`);
     wrapped.cause = cause;
+    wrapped.status = cause?.status;
     console.error(`[DawnMesh client] ${stage}`, cause);
     throw wrapped;
   }
@@ -236,7 +237,7 @@ async function completeAdmission(roomId, inviteCode) {
       if (settled) return;
       settled = true;
       window.clearTimeout(timer);
-      socket.close();
+      socket.close(1000, "admission complete");
       error ? reject(error) : resolve({ ...value, inviteScalar: scalar });
     };
     socket.addEventListener("message", async (message) => {
@@ -294,21 +295,29 @@ async function enterRoom({ grant, roomKey, inviteCode, inviteScalar, chatCipher 
     worker: null,
     leaving: false,
     eventsReconnectTimer: null,
+    mediaReconnectTimer: null,
+    mediaReconnectAttempts: 0,
+    mediaReconnectStarted: 0,
     fullReconnectTimer: null,
-    reconnectStarted: 0,
+    fullReconnectStarted: 0,
     inviteVisible: false,
     inviteTimer: null,
   };
   $("#audio-profile").value = state.active.audioProfile;
   show($("#room-view"));
   renderRoom();
+  if (state.active.isHost) revealInvite();
   try {
     await connectEvents();
+  } catch (cause) {
+    toast(errorText(cause));
+    scheduleFullReconnect("管理通道未连接，正在自动恢复");
+  }
+  try {
     await connectMedia(grant);
   } catch (cause) {
-    setRoomStatus("reconnecting", "首次连接未完成，正在自动恢复");
     toast(errorText(cause));
-    scheduleFullReconnect();
+    scheduleMediaReconnect("媒体连接未完成，正在自动恢复");
   }
   await acquireWakeLock();
 }
@@ -318,7 +327,7 @@ async function connectEvents() {
   if (!active || active.leaving) return;
   if (active.socket) {
     active.socket.intentional = true;
-    active.socket.close();
+    active.socket.close(1000, "replaced");
   }
   const socket = openEventSocket(active.grant.eventsUrl, active.resumeToken);
   active.socket = socket;
@@ -330,6 +339,11 @@ async function connectEvents() {
     active.eventsReconnectTimer = window.setTimeout(() => connectEvents().catch(() => scheduleFullReconnect()), 2000);
   });
   await waitForOpen(socket);
+  if (state.active !== active || active.leaving) return;
+  if (active.room?.state === "connected") {
+    sendEvent({ type: "media_ready", memberId: active.memberId });
+  }
+  updateConnectionStatus(active);
 }
 
 async function handleManagementEvent(event) {
@@ -467,10 +481,13 @@ async function connectMedia(grant) {
     $("#resume-audio").hidden = room.canPlaybackAudio;
   });
   room.on(LivekitClient.RoomEvent.Reconnecting, () => setRoomStatus("reconnecting", "媒体连接波动，正在恢复"));
-  room.on(LivekitClient.RoomEvent.Reconnected, () => setRoomStatus("connected", "连接安全 · 端到端加密"));
-  room.on(LivekitClient.RoomEvent.Disconnected, () => {
+  room.on(LivekitClient.RoomEvent.Reconnected, () => updateConnectionStatus(active));
+  room.on(LivekitClient.RoomEvent.Disconnected, (reason) => {
     if (active.intentionalMediaDisconnects?.has(room)) return;
-    if (state.active === active && !active.leaving) scheduleFullReconnect();
+    if (state.active === active && !active.leaving) {
+      console.warn("[DawnMesh client] LiveKit media disconnected", reason);
+      scheduleMediaReconnect("媒体连接中断，正在自动恢复");
+    }
   });
   room.on(LivekitClient.RoomEvent.DataReceived, (payload, participant, _kind, topic) => {
     if (topic === "dawnmesh.chat.v1" && participant) receiveChat(payload, participant).catch(() => {});
@@ -478,9 +495,9 @@ async function connectMedia(grant) {
   await operation("LiveKit 加密密钥初始化", () => keyProvider.setKey(DawnCrypto.base64Url(active.roomKey)));
   await operation("LiveKit 端到端加密启用", () => room.setE2EEEnabled(true));
   await operation("LiveKit 媒体连接", () => room.connect(grant.livekitUrl, grant.livekitToken, { autoSubscribe: true }));
-  sendEvent({ type: "media_ready", memberId: active.memberId });
+  if (active.socket?.readyState === WebSocket.OPEN) sendEvent({ type: "media_ready", memberId: active.memberId });
   await applyMicrophone(currentMicWanted());
-  setRoomStatus("connected", "连接安全 · 端到端加密");
+  updateConnectionStatus(active);
 }
 
 function currentMicWanted() {
@@ -515,15 +532,32 @@ async function applyAudioBitrate() {
   }
 }
 
-function scheduleFullReconnect() {
+function updateConnectionStatus(active = state.active) {
+  if (!active || state.active !== active || active.leaving) return;
+  const managementReady = active.socket?.readyState === WebSocket.OPEN;
+  const mediaReady = active.room?.state === "connected";
+  if (managementReady && mediaReady) {
+    setRoomStatus("connected", "连接安全 · 端到端加密");
+  } else if (!managementReady) {
+    setRoomStatus("reconnecting", "管理通道中断，正在自动恢复");
+  } else {
+    setRoomStatus("reconnecting", "媒体连接中断，正在自动恢复");
+  }
+}
+
+function scheduleFullReconnect(statusLabel = "连接中断，正在自动恢复") {
   const active = state.active;
   if (!active || active.leaving || active.fullReconnectTimer) return;
-  if (!active.reconnectStarted) active.reconnectStarted = Date.now();
-  if (Date.now() - active.reconnectStarted > 10 * 60 * 1000) {
+  window.clearTimeout(active.eventsReconnectTimer);
+  active.eventsReconnectTimer = null;
+  window.clearTimeout(active.mediaReconnectTimer);
+  active.mediaReconnectTimer = null;
+  if (!active.fullReconnectStarted) active.fullReconnectStarted = Date.now();
+  if (Date.now() - active.fullReconnectStarted > 10 * 60 * 1000) {
     setRoomStatus("failed", "恢复窗口已结束，请重新加入");
     return;
   }
-  setRoomStatus("reconnecting", "连接中断，正在自动恢复");
+  setRoomStatus("reconnecting", statusLabel);
   active.fullReconnectTimer = window.setTimeout(async () => {
     active.fullReconnectTimer = null;
     try {
@@ -534,12 +568,63 @@ function scheduleFullReconnect() {
       active.grant = grant;
       active.resumeToken = grant.resumeToken;
       await connectEvents();
-      await connectMedia(grant);
-      active.reconnectStarted = 0;
-    } catch (_) {
-      scheduleFullReconnect();
+      active.fullReconnectStarted = 0;
+      if (active.room?.state === "connected") {
+        active.mediaReconnectAttempts = 0;
+        active.mediaReconnectStarted = 0;
+        updateConnectionStatus(active);
+        return;
+      }
+      try {
+        await connectMedia(grant);
+        active.mediaReconnectAttempts = 0;
+        active.mediaReconnectStarted = 0;
+      } catch (cause) {
+        console.warn("[DawnMesh client] media recovery after session resume failed", cause);
+        scheduleMediaReconnect("管理通道已恢复，媒体连接正在恢复");
+      }
+    } catch (cause) {
+      console.warn("[DawnMesh client] session recovery failed", cause);
+      scheduleFullReconnect("管理通道恢复失败，正在重试");
     }
   }, 2000);
+}
+
+function scheduleMediaReconnect(statusLabel = "媒体连接中断，正在自动恢复") {
+  const active = state.active;
+  if (!active || active.leaving || active.mediaReconnectTimer) return;
+  if (!active.mediaReconnectStarted) active.mediaReconnectStarted = Date.now();
+  if (Date.now() - active.mediaReconnectStarted > 10 * 60 * 1000) {
+    setRoomStatus("failed", "媒体恢复窗口已结束，请重新加入");
+    return;
+  }
+  const delays = [2000, 4000, 8000, 15000, 30000];
+  const delay = delays[Math.min(active.mediaReconnectAttempts, delays.length - 1)];
+  active.mediaReconnectAttempts += 1;
+  setRoomStatus("reconnecting", statusLabel);
+  active.mediaReconnectTimer = window.setTimeout(async () => {
+    active.mediaReconnectTimer = null;
+    try {
+      const media = await api(`/api/v1/rooms/${encodeURIComponent(active.summary.id)}/media-grant`, {
+        method: "POST",
+        sessionToken: active.resumeToken,
+        body: JSON.stringify({}),
+      });
+      const grant = { ...active.grant, ...media };
+      active.grant = grant;
+      await connectMedia(grant);
+      active.mediaReconnectAttempts = 0;
+      active.mediaReconnectStarted = 0;
+    } catch (cause) {
+      console.warn("[DawnMesh client] media recovery failed", cause);
+      if (cause?.status === 401 || cause?.status === 410) {
+        scheduleFullReconnect("会话已失效，正在恢复房间连接");
+      } else {
+        const seconds = Math.ceil(delays[Math.min(active.mediaReconnectAttempts, delays.length - 1)] / 1000);
+        scheduleMediaReconnect(`媒体连接恢复失败，${seconds} 秒后重试`);
+      }
+    }
+  }, delay);
 }
 
 function setRoomStatus(mode, label) {
@@ -743,8 +828,9 @@ async function cleanupRoom() {
   active.leaving = true;
   window.clearTimeout(active.inviteTimer);
   window.clearTimeout(active.eventsReconnectTimer);
+  window.clearTimeout(active.mediaReconnectTimer);
   window.clearTimeout(active.fullReconnectTimer);
-  if (active.socket) { active.socket.intentional = true; active.socket.close(); }
+  if (active.socket) { active.socket.intentional = true; active.socket.close(1000, "leaving"); }
   await active.room?.disconnect().catch(() => {});
   active.worker?.terminate();
   $("#remote-audio").replaceChildren();

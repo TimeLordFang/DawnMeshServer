@@ -11,6 +11,7 @@ JSON responses use UTF-8. Request bodies are limited to 64 KiB. Errors have the 
 - `POST /api/v1/rooms` accepts `name`, `nickname`, `deviceId`, `maxParticipants`, and `hostDisconnectTimeoutMinutes` (1–60).
 - `POST /api/v1/rooms/{room}/admissions` creates a 30-second PAKE relay session. It accepts `nickname` and `deviceId`; no invite code is sent to this API.
 - `POST /api/v1/rooms/{room}/resume` accepts `memberId` and the current `resumeToken`. A successful response rotates that token.
+- `POST /api/v1/rooms/{room}/media-grant` uses the current `X-Dawn-Session` token to refresh only the short-lived LiveKit grant. It does not rotate the member token or interrupt the management WebSocket.
 
 Creation and admission requests are bounded per source, device, room, and process. The default process room limit is 1,000 and can be changed with `DAWNMESH_MAX_ROOMS`.
 
@@ -42,7 +43,7 @@ Create, completed admission, and resume responses return:
 
 ```json
 {
-  "room": {"id":"...", "name":"...", "memberCount":1, "maxParticipants":25, "hostNickname":"..."},
+  "room": {"id":"...", "name":"...", "memberCount":1, "maxParticipants":25, "hostNickname":"...", "isHost":true},
   "memberId":"...",
   "livekitUrl":"wss://rtc.example.com",
   "livekitToken":"...",

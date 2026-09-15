@@ -91,6 +91,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/v1/rooms", s.withAccess(s.createRoom))
 	mux.HandleFunc("POST /api/v1/rooms/{room}/admissions", s.withAccess(s.createAdmission))
 	mux.HandleFunc("POST /api/v1/rooms/{room}/resume", s.withAccess(s.resume))
+	mux.HandleFunc("POST /api/v1/rooms/{room}/media-grant", s.withSession(s.mediaGrant))
 	mux.HandleFunc("PATCH /api/v1/rooms/{room}", s.withSession(s.renameRoom))
 	mux.HandleFunc("PUT /api/v1/rooms/{room}/members/{member}/voice-policy", s.withSession(s.voicePolicy))
 	mux.HandleFunc("POST /api/v1/rooms/{room}/handover", s.withSession(s.handover))
@@ -371,6 +372,34 @@ func (s *Server) resume(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, grant)
 }
 
+func (s *Server) mediaGrant(w http.ResponseWriter, r *http.Request, caller *Member) {
+	roomID := r.PathValue("room")
+	s.mu.Lock()
+	room := s.rooms[roomID]
+	if room == nil || caller.RoomID != roomID {
+		s.mu.Unlock()
+		writeError(w, http.StatusForbidden, "成员不属于该房间")
+		return
+	}
+	if !s.allowAttemptLocked("media-grant:"+caller.ID, 30, time.Minute) {
+		s.mu.Unlock()
+		writeError(w, http.StatusTooManyRequests, "媒体重连过于频繁，请稍后再试")
+		return
+	}
+	memberID := caller.ID
+	nickname := caller.Nickname
+	s.mu.Unlock()
+	token, err := s.livekit.joinToken(roomID, memberID, nickname)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "无法签发媒体令牌")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"livekitUrl":   s.cfg.LiveKitPublicURL,
+		"livekitToken": token,
+	})
+}
+
 func (s *Server) renameRoom(w http.ResponseWriter, r *http.Request, caller *Member) {
 	if caller.RoomID != r.PathValue("room") || !caller.IsHost {
 		writeError(w, http.StatusForbidden, "只有房主可以改名")
@@ -523,8 +552,12 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer conn.CloseNow()
+	conn.SetReadLimit(8 << 10)
 	socketID := memberID(member, admission)
 	s.addSocket(socketID, conn)
+	keepAliveContext, stopKeepAlive := context.WithCancel(r.Context())
+	defer stopKeepAlive()
+	go keepEventSocketAlive(keepAliveContext, conn, socketID, 20*time.Second)
 	if member != nil {
 		s.markConnected(member.ID, true)
 		s.send(conn, map[string]any{"type": "snapshot", "room": s.roomJSONSafe(member.RoomID), "hostMemberId": s.hostID(member.RoomID), "canSpeak": member.CanSpeak, "members": s.membersJSONSafe(member.RoomID)})
@@ -535,19 +568,46 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 		readContext, cancel = context.WithTimeout(readContext, 35*time.Second)
 		defer cancel()
 	}
+	var readErr error
 	for {
 		var event map[string]any
-		if err := wsjson.Read(readContext, conn, &event); err != nil {
+		if readErr = wsjson.Read(readContext, conn, &event); readErr != nil {
 			break
 		}
 		if err := s.routeEvent(r.Context(), member, admission, event); err != nil {
 			s.send(conn, map[string]any{"type": "error", "error": err.Error()})
 		}
 	}
+	status := websocket.CloseStatus(readErr)
+	if status != websocket.StatusNormalClosure && status != websocket.StatusGoingAway && status != websocket.StatusNoStatusRcvd && !errors.Is(readErr, context.Canceled) {
+		slog.Warn("management websocket closed", "member", socketID, "status", status, "error", readErr)
+	}
 	s.removeSocket(socketID, conn)
 	if member != nil {
 		if !s.hasSocket(socketID) {
 			s.markConnected(member.ID, false)
+		}
+	}
+}
+
+func keepEventSocketAlive(ctx context.Context, conn *websocket.Conn, socketID string, interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			pingContext, cancel := context.WithTimeout(ctx, 8*time.Second)
+			err := conn.Ping(pingContext)
+			cancel()
+			if err != nil {
+				if !errors.Is(err, context.Canceled) {
+					slog.Warn("management websocket heartbeat failed", "member", socketID, "error", err)
+				}
+				conn.CloseNow()
+				return
+			}
 		}
 	}
 }
@@ -667,7 +727,9 @@ func (s *Server) connectionGrant(room *Room, member *Member, resume string) (map
 	if err != nil {
 		return nil, err
 	}
-	return map[string]any{"room": s.roomJSON(room), "memberId": member.ID, "livekitUrl": s.cfg.LiveKitPublicURL, "livekitToken": token, "resumeToken": resume, "eventsUrl": s.cfg.PublicBaseURL + "/api/v1/events"}, nil
+	roomSummary := s.roomJSON(room)
+	roomSummary["isHost"] = member.ID == room.HostMemberID
+	return map[string]any{"room": roomSummary, "memberId": member.ID, "livekitUrl": s.cfg.LiveKitPublicURL, "livekitToken": token, "resumeToken": resume, "eventsUrl": s.cfg.PublicBaseURL + "/api/v1/events"}, nil
 }
 
 func (s *Server) roomJSON(room *Room) map[string]any {
