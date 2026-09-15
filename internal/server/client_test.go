@@ -115,11 +115,14 @@ func TestBrowserWebSocketSubprotocolAuthenticatesWithoutURLCredentials(t *testin
 	websocketURL := "ws" + strings.TrimPrefix(httpServer.URL, "http") + "/api/v1/events"
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	connection, response, err := websocket.Dial(ctx, websocketURL, &websocket.DialOptions{Subprotocols: []string{
-		browserEventProtocol,
-		protocol("dawn-access", "server-access"),
-		protocol("dawn-session", grant.ResumeToken),
-	}})
+	connection, response, err := websocket.Dial(ctx, websocketURL, &websocket.DialOptions{
+		HTTPHeader: http.Header{"Origin": []string{"https://talk.example.test"}},
+		Subprotocols: []string{
+			browserEventProtocol,
+			protocol("dawn-access", "server-access"),
+			protocol("dawn-session", grant.ResumeToken),
+		},
+	})
 	if err != nil {
 		status := 0
 		if response != nil {
@@ -185,5 +188,112 @@ func TestEventSocketHeartbeatKeepsConnectionResponsive(t *testing.T) {
 	case <-handlerDone:
 	case <-ctx.Done():
 		t.Fatal("heartbeat handler did not stop after client close")
+	}
+}
+
+func TestHTTPEventStreamFallbackReceivesManagementEvents(t *testing.T) {
+	server := testServer(t)
+	httpServer := httptest.NewServer(server.Handler())
+	defer httpServer.Close()
+
+	createRequest, err := http.NewRequest(http.MethodPost, httpServer.URL+"/api/v1/rooms", strings.NewReader(`{
+      "name":"Fallback Room","nickname":"Fallback Host","deviceId":"fallback-device-1234567890123456",
+      "maxParticipants":25,"hostDisconnectTimeoutMinutes":10}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	createRequest.Header.Set("Authorization", "Bearer server-access")
+	createRequest.Header.Set("Content-Type", "application/json")
+	createResponse, err := http.DefaultClient.Do(createRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer createResponse.Body.Close()
+	var grant struct {
+		ResumeToken string `json:"resumeToken"`
+		Room        struct {
+			ID string `json:"id"`
+		} `json:"room"`
+	}
+	if err := json.NewDecoder(createResponse.Body).Decode(&grant); err != nil {
+		t.Fatal(err)
+	}
+
+	streamContext, cancelStream := context.WithCancel(context.Background())
+	defer cancelStream()
+	streamRequest, err := http.NewRequestWithContext(streamContext, http.MethodGet, httpServer.URL+"/api/v1/events/stream", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	streamRequest.Header.Set("Authorization", "Bearer server-access")
+	streamRequest.Header.Set("X-Dawn-Session", grant.ResumeToken)
+	streamResponse, err := http.DefaultClient.Do(streamRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer streamResponse.Body.Close()
+	if streamResponse.StatusCode != http.StatusOK {
+		t.Fatalf("stream status=%d", streamResponse.StatusCode)
+	}
+	decoder := json.NewDecoder(streamResponse.Body)
+	readEvent := func() map[string]any {
+		t.Helper()
+		result := make(chan map[string]any, 1)
+		failure := make(chan error, 1)
+		go func() {
+			var event map[string]any
+			if err := decoder.Decode(&event); err != nil {
+				failure <- err
+				return
+			}
+			result <- event
+		}()
+		select {
+		case event := <-result:
+			return event
+		case err := <-failure:
+			t.Fatalf("decode stream event: %v", err)
+		case <-time.After(2 * time.Second):
+			t.Fatal("timed out waiting for stream event")
+		}
+		return nil
+	}
+	if event := readEvent(); event["type"] != "snapshot" {
+		t.Fatalf("first stream event=%v", event)
+	}
+
+	renameRequest, err := http.NewRequest(http.MethodPatch, httpServer.URL+"/api/v1/rooms/"+grant.Room.ID, strings.NewReader(`{"name":"Renamed over HTTP"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	renameRequest.Header.Set("Authorization", "Bearer server-access")
+	renameRequest.Header.Set("X-Dawn-Session", grant.ResumeToken)
+	renameRequest.Header.Set("Content-Type", "application/json")
+	renameResponse, err := http.DefaultClient.Do(renameRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	renameResponse.Body.Close()
+	if renameResponse.StatusCode != http.StatusOK {
+		t.Fatalf("rename status=%d", renameResponse.StatusCode)
+	}
+	if event := readEvent(); event["type"] != "room_updated" {
+		t.Fatalf("broadcast stream event=%v", event)
+	}
+
+	sendRequest, err := http.NewRequest(http.MethodPost, httpServer.URL+"/api/v1/events/send", strings.NewReader(`{"type":"unsupported"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sendRequest.Header.Set("Authorization", "Bearer server-access")
+	sendRequest.Header.Set("X-Dawn-Session", grant.ResumeToken)
+	sendRequest.Header.Set("Content-Type", "application/json")
+	sendResponse, err := http.DefaultClient.Do(sendRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sendResponse.Body.Close()
+	if sendResponse.StatusCode != http.StatusBadRequest {
+		t.Fatalf("send status=%d", sendResponse.StatusCode)
 	}
 }

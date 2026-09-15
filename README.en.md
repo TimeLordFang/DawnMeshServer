@@ -62,7 +62,7 @@ Build locally from source with:
 docker compose up -d --build
 ```
 
-Merge the relevant parts of [`deploy/nginx.example.conf`](deploy/nginx.example.conf) into your Nginx configuration. `/api/` must allow WebSocket upgrades and retain the long read timeout from the example; the server sends a WebSocket heartbeat every 20 seconds. Forward UDP 57882 and TCP 57881 directly when possible. A successful HTTPS health check verifies the control plane only, not the WebRTC media path.
+Merge the relevant parts of [`deploy/nginx.example.conf`](deploy/nginx.example.conf) into your Nginx configuration. `/api/` should allow WebSocket upgrades and must preserve the original `Host`, `Origin`, and `Sec-WebSocket-Protocol` headers. The last header carries the browser management channel credentials. The server sends a WebSocket heartbeat every 20 seconds; when an upgrade still fails, the web client automatically uses an authenticated HTTPS event stream. An Nginx `401` usually means credential headers were not forwarded, while `403` usually means `Host` and `Origin` did not match. Forward UDP 57882 and TCP 57881 directly when possible. A successful HTTPS health check verifies the control plane only, not the WebRTC media path.
 
 Add `DAWNMESH_PUBLIC_URL` in the Android app's network intercom settings and use `DAWNMESH_ACCESS_TOKEN` as the server credential.
 
@@ -70,7 +70,7 @@ Add `DAWNMESH_PUBLIC_URL` in the Android app's network intercom settings and use
 
 After deployment, open `https://talk.example.com/client/`. The web client uses the server that served the page. Enter `DAWNMESH_ACCESS_TOKEN` on the initial screen when the deployment requires it.
 
-The browser and Android public-room clients share the same protocol and rooms. The web client can create and discover rooms, join with a six-digit invite, use push-to-talk or automatic voice, switch among clarity/balanced/data-saver profiles, exchange encrypted text messages, and show speaking state with stable member avatars. Hosts can rename or end the room, control another member's microphone permission, and transfer ownership. The management channel uses heartbeats, while media recovery independently refreshes its short-lived grant within the existing ten-minute member retention window.
+The browser and Android public-room clients share the same protocol and rooms. The web client can create and discover rooms, join with a six-digit invite, use push-to-talk or automatic voice, switch among clarity/balanced/data-saver profiles, exchange encrypted text messages, and show speaking state with stable member avatars. Hosts can rename or end the room, control another member's microphone permission, and transfer ownership. The management channel prefers WebSocket and automatically falls back to an authenticated HTTPS stream when a proxy rejects the upgrade. Media recovery independently refreshes its short-lived grant within the existing ten-minute member retention window.
 
 Invite authentication uses the same scrypt and P-256 SPAKE2 transcript as Android, and the invite never reaches the server. LiveKit media uses the same E2EE room key; chat uses a purpose-separated AES-256-GCM key.
 

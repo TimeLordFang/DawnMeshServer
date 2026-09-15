@@ -25,7 +25,7 @@ Creation and admission requests are bounded per source, device, room, and proces
 
 ## Event channel
 
-Connect to `WSS /api/v1/events` with both authentication headers. The channel sends room snapshots and relays the bounded SPAKE2 messages `pake_hello`, `pake_reply`, `pake_confirm`, and `pake_key`. After LiveKit joins, the App sends `media_ready`; the server then applies the persisted `canSpeak` policy through the LiveKit Room API.
+Connect to `WSS /api/v1/events` with both authentication headers. The channel sends room snapshots and relays the bounded SPAKE2 messages `pake_hello`, `pake_reply`, `pake_confirm`, and `pake_key`. After LiveKit joins, the App sends `media_ready`; the server then applies the persisted `canSpeak` policy through the LiveKit Room API. Browser clients automatically fall back to `GET /api/v1/events/stream` (newline-delimited JSON) and `POST /api/v1/events/send` when a reverse proxy rejects the WebSocket upgrade. The fallback endpoints use the normal `Authorization` and `X-Dawn-Session` headers.
 
 The PAKE transcript binds the server instance ID, room ID, admission ID, member ID, and both protocol roles. The six-digit invite and random room key remain in clients. Chat payloads use a separate AES-256-GCM key and are opaque to this service.
 

@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
 	"sort"
 	"strings"
 	"sync"
@@ -24,19 +25,20 @@ import (
 )
 
 type Server struct {
-	cfg        config.Config
-	startedAt  time.Time
-	store      *store
-	livekit    *liveKitManager
-	mu         sync.Mutex
-	wsWriteMu  sync.Mutex
-	rooms      map[string]*Room
-	members    map[string]*Member
-	admissions map[string]*Admission
-	sockets    map[string]map[*websocket.Conn]struct{}
-	attempts   map[string][]time.Time
-	monitors   map[string]*monitorSession
-	stop       chan struct{}
+	cfg          config.Config
+	startedAt    time.Time
+	store        *store
+	livekit      *liveKitManager
+	mu           sync.Mutex
+	wsWriteMu    sync.Mutex
+	rooms        map[string]*Room
+	members      map[string]*Member
+	admissions   map[string]*Admission
+	sockets      map[string]map[*websocket.Conn]struct{}
+	eventStreams map[string]map[eventStream]struct{}
+	attempts     map[string][]time.Time
+	monitors     map[string]*monitorSession
+	stop         chan struct{}
 }
 
 func New(cfg config.Config) (*Server, error) {
@@ -49,7 +51,7 @@ func New(cfg config.Config) (*Server, error) {
 		db.close()
 		return nil, err
 	}
-	server := &Server{cfg: cfg, startedAt: time.Now().UTC(), store: db, livekit: newLiveKitManager(cfg.LiveKitURL, cfg.LiveKitPublicURL, cfg.LiveKitAPIKey, cfg.LiveKitAPISecret), rooms: rooms, members: members, admissions: map[string]*Admission{}, sockets: map[string]map[*websocket.Conn]struct{}{}, attempts: map[string][]time.Time{}, monitors: map[string]*monitorSession{}, stop: make(chan struct{})}
+	server := &Server{cfg: cfg, startedAt: time.Now().UTC(), store: db, livekit: newLiveKitManager(cfg.LiveKitURL, cfg.LiveKitPublicURL, cfg.LiveKitAPIKey, cfg.LiveKitAPISecret), rooms: rooms, members: members, admissions: map[string]*Admission{}, sockets: map[string]map[*websocket.Conn]struct{}{}, eventStreams: map[string]map[eventStream]struct{}{}, attempts: map[string][]time.Time{}, monitors: map[string]*monitorSession{}, stop: make(chan struct{})}
 	now := time.Now().UTC()
 	for _, room := range rooms {
 		if room.EmptyDeadline.IsZero() {
@@ -98,6 +100,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("DELETE /api/v1/rooms/{room}/members/{member}", s.withSession(s.leaveMember))
 	mux.HandleFunc("DELETE /api/v1/rooms/{room}", s.withSession(s.endRoom))
 	mux.HandleFunc("GET /api/v1/events", s.withEventAccess(s.events))
+	mux.HandleFunc("GET /api/v1/events/stream", s.withAccess(s.eventHTTPStream))
+	mux.HandleFunc("POST /api/v1/events/send", s.withAccess(s.eventHTTPSend))
 	mux.HandleFunc("GET /api/v1/admin/overview", s.withAdminAccess(s.adminOverview))
 	mux.HandleFunc("PATCH /api/v1/admin/rooms/{room}", s.withAdminAccess(s.adminRenameRoom))
 	mux.HandleFunc("PUT /api/v1/admin/rooms/{room}/members/{member}/voice-policy", s.withAdminAccess(s.adminVoicePolicy))
@@ -131,6 +135,7 @@ func (s *Server) withEventAccess(next http.HandlerFunc) http.HandlerFunc {
 			access = browserSocketCredential(r, "dawn-access")
 		}
 		if s.cfg.AccessToken != "" && !constantEqual(access, s.cfg.AccessToken) {
+			slog.Warn("management websocket access rejected", "remote", clientIP(r), "host", r.Host)
 			writeError(w, http.StatusUnauthorized, "服务器访问凭证无效")
 			return
 		}
@@ -523,32 +528,18 @@ func (s *Server) endRoom(w http.ResponseWriter, r *http.Request, caller *Member)
 }
 
 func (s *Server) events(w http.ResponseWriter, r *http.Request) {
-	token := eventSessionToken(r)
-	hash := tokenHash(token)
-	s.mu.Lock()
-	var member *Member
-	var admission *Admission
-	for _, item := range s.members {
-		if subtle.ConstantTimeCompare(item.ResumeTokenHash, hash) == 1 {
-			member = item
-			break
-		}
-	}
-	if member == nil {
-		for _, item := range s.admissions {
-			if subtle.ConstantTimeCompare(item.ResumeTokenHash, hash) == 1 {
-				admission = item
-				break
-			}
-		}
-	}
-	s.mu.Unlock()
+	member, admission := s.eventPrincipal(eventSessionToken(r))
 	if member == nil && admission == nil {
+		slog.Warn("management websocket session rejected", "remote", clientIP(r), "host", r.Host)
 		writeError(w, http.StatusUnauthorized, "会话无效")
 		return
 	}
-	conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{Subprotocols: []string{browserEventProtocol}})
+	conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
+		Subprotocols:   []string{browserEventProtocol},
+		OriginPatterns: s.websocketOriginPatterns(),
+	})
 	if err != nil {
+		slog.Warn("management websocket upgrade rejected", "remote", clientIP(r), "host", r.Host, "origin", r.Header.Get("Origin"), "forwardedHost", r.Header.Get("X-Forwarded-Host"), "error", err)
 		return
 	}
 	defer conn.CloseNow()
@@ -588,6 +579,14 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 			s.markConnected(member.ID, false)
 		}
 	}
+}
+
+func (s *Server) websocketOriginPatterns() []string {
+	publicURL, err := url.Parse(s.cfg.PublicBaseURL)
+	if err != nil || publicURL.Host == "" {
+		return nil
+	}
+	return []string{publicURL.Host}
 }
 
 func keepEventSocketAlive(ctx context.Context, conn *websocket.Conn, socketID string, interval time.Duration) {
@@ -920,13 +919,10 @@ func (s *Server) deleteRoom(ctx context.Context, id string) {
 		s.mu.Unlock()
 		return
 	}
-	connections := []*websocket.Conn{}
+	memberIDs := []string{}
 	for _, member := range s.members {
-		if member.RoomID != id {
-			continue
-		}
-		for connection := range s.sockets[member.ID] {
-			connections = append(connections, connection)
+		if member.RoomID == id {
+			memberIDs = append(memberIDs, member.ID)
 		}
 	}
 	delete(s.rooms, id)
@@ -942,8 +938,8 @@ func (s *Server) deleteRoom(ctx context.Context, id string) {
 	}
 	_ = s.store.deleteRoom(ctx, id)
 	s.mu.Unlock()
-	for _, connection := range connections {
-		s.send(connection, map[string]any{"type": "room_ended"})
+	for _, memberID := range memberIDs {
+		s.sendTo(memberID, map[string]any{"type": "room_ended"})
 	}
 	lkctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
@@ -969,7 +965,7 @@ func (s *Server) removeSocket(id string, c *websocket.Conn) {
 func (s *Server) hasSocket(id string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return len(s.sockets[id]) > 0
+	return len(s.sockets[id]) > 0 || len(s.eventStreams[id]) > 0
 }
 func (s *Server) send(c *websocket.Conn, value any) {
 	s.wsWriteMu.Lock()
@@ -984,9 +980,23 @@ func (s *Server) sendTo(id string, value any) {
 	for c := range s.sockets[id] {
 		connections = append(connections, c)
 	}
+	streams := make([]eventStream, 0, len(s.eventStreams[id]))
+	for stream := range s.eventStreams[id] {
+		streams = append(streams, stream)
+	}
 	s.mu.Unlock()
 	for _, c := range connections {
 		s.send(c, value)
+	}
+	if len(streams) == 0 {
+		return
+	}
+	payload, err := encodeStreamEvent(value)
+	if err != nil {
+		return
+	}
+	for _, stream := range streams {
+		_ = deliverStreamEvent(stream, payload)
 	}
 }
 func (s *Server) broadcastRoom(roomID string, value any) {

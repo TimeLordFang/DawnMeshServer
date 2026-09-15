@@ -62,7 +62,7 @@ DAWNMESH_IMAGE=ghcr.io/timelordfang/dawnmeshserver:1.0.0
 docker compose up -d --build
 ```
 
-将 [`deploy/nginx.example.conf`](deploy/nginx.example.conf) 中需要的部分加入现有 Nginx 配置。`/api/` 必须允许 WebSocket 升级，因为入房验证和房间管理事件使用该连接，并应保留示例中的长连接读取超时。服务端每 20 秒发送一次 WebSocket 心跳。优先直通 UDP 57882 和 TCP 57881；HTTPS 健康检查成功只代表控制平面可用，不代表 WebRTC 媒体链路可用。
+将 [`deploy/nginx.example.conf`](deploy/nginx.example.conf) 中需要的部分加入现有 Nginx 配置。`/api/` 应允许 WebSocket 升级，并必须转发原始 `Host`、`Origin` 和 `Sec-WebSocket-Protocol`；后者携带浏览器管理通道的临时凭证。服务端每 20 秒发送一次 WebSocket 心跳。若代理仍拒绝升级，网页端会自动切换到带鉴权请求头的 HTTPS 流式管理通道。Nginx 返回 `401` 通常表示凭证请求头未转发，`403` 通常表示 `Host` 与 `Origin` 不一致。优先直通 UDP 57882 和 TCP 57881；HTTPS 健康检查成功只代表控制平面可用，不代表 WebRTC 媒体链路可用。
 
 最后在 Android 客户端的网络对讲页面添加 `DAWNMESH_PUBLIC_URL`，并输入 `DAWNMESH_ACCESS_TOKEN`。
 
@@ -78,7 +78,7 @@ docker compose up -d --build
 - 按住说话和自动通话、清晰/平衡/省流三档音质
 - 成员头像、发言状态和稳定的加入顺序
 - 房主改名、成员封麦/开麦、转让房主和解散房间
-- 管理通道使用心跳保活；媒体断线时独立刷新短时令牌，并在十分钟成员保留窗口内自动恢复
+- 管理通道优先使用 WebSocket，并在代理拒绝升级时自动切换到普通 HTTPS 流；媒体断线时独立刷新短时令牌，并在十分钟成员保留窗口内自动恢复
 - 响应式桌面和移动端布局
 
 浏览器麦克风和 Web Crypto 要求 HTTPS 安全上下文；`localhost` 仅用于本地开发。Safari、Chrome、Edge、Firefox 对 WebRTC E2EE、音频后台运行和输出设备切换的支持存在差异。移动浏览器进入锁屏或被系统回收后无法提供与 Android 前台服务相同的后台持续性，长时间对讲仍建议使用 Android App。网页端的 WebSocket 凭证通过 `Sec-WebSocket-Protocol` 请求头传递，Nginx 等反向代理不要记录该请求头。

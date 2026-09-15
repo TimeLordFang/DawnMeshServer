@@ -18,6 +18,7 @@ const state = {
   active: null,
   toastTimer: null,
   wakeLock: null,
+  preferHTTPEvents: false,
 };
 
 if (!state.deviceId || state.deviceId.length < 24) {
@@ -99,12 +100,125 @@ function openEventSocket(url, sessionToken) {
   return new WebSocket(websocketURL(sameOrigin.href), protocols);
 }
 
+function managementHeaders(sessionToken) {
+  const headers = new Headers({ "Accept": "application/x-ndjson", "X-Dawn-Session": sessionToken });
+  if (state.accessToken) headers.set("Authorization", `Bearer ${state.accessToken}`);
+  return headers;
+}
+
+function openHTTPEventChannel(sessionToken) {
+  const events = new EventTarget();
+  const controller = new AbortController();
+  let finished = false;
+  const channel = {
+    readyState: WebSocket.CONNECTING,
+    intentional: false,
+    transport: "http-stream",
+    addEventListener: (...args) => events.addEventListener(...args),
+    removeEventListener: (...args) => events.removeEventListener(...args),
+    send(data) {
+      if (channel.readyState !== WebSocket.OPEN) throw new Error("管理通道暂不可用");
+      api("/api/v1/events/send", { method: "POST", sessionToken, body: data }).catch((cause) => {
+        if (cause?.status && cause.status !== 401 && cause.status !== 410) {
+          events.dispatchEvent(new MessageEvent("message", { data: JSON.stringify({ type: "error", error: errorText(cause) }) }));
+        } else {
+          finish(cause);
+        }
+      });
+    },
+    close() {
+      if (finished) return;
+      channel.readyState = WebSocket.CLOSING;
+      controller.abort();
+      finish();
+    },
+  };
+  const finish = (cause = null) => {
+    if (finished) return;
+    finished = true;
+    channel.readyState = WebSocket.CLOSED;
+    if (cause) {
+      events.dispatchEvent(new CustomEvent("error", { detail: cause }));
+    }
+    events.dispatchEvent(new Event("close"));
+  };
+  (async () => {
+    try {
+      const response = await fetch("/api/v1/events/stream", {
+        headers: managementHeaders(sessionToken),
+        cache: "no-store",
+        redirect: "error",
+        signal: controller.signal,
+      });
+      if (!response.ok) {
+        let payload = {};
+        try { payload = await response.json(); } catch (_) {}
+        const cause = new Error(payload.error || `HTTP 管理通道失败（${response.status}）`);
+        cause.status = response.status;
+        throw cause;
+      }
+      if (!response.body) throw new Error("浏览器不支持流式管理通道");
+      channel.readyState = WebSocket.OPEN;
+      events.dispatchEvent(new Event("open"));
+      const reader = response.body.getReader();
+      const streamDecoder = new TextDecoder();
+      let pending = "";
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        pending += streamDecoder.decode(value, { stream: true });
+        const lines = pending.split("\n");
+        pending = lines.pop() || "";
+        for (const line of lines) {
+          if (line.trim()) events.dispatchEvent(new MessageEvent("message", { data: line }));
+        }
+      }
+      pending += streamDecoder.decode();
+      if (pending.trim()) events.dispatchEvent(new MessageEvent("message", { data: pending }));
+      throw new Error("HTTP 管理通道已结束");
+    } catch (cause) {
+      if (cause?.name === "AbortError" && channel.intentional) finish();
+      else finish(cause);
+    }
+  })();
+  return channel;
+}
+
 function waitForOpen(socket, timeout = 12000) {
   return new Promise((resolve, reject) => {
     const timer = window.setTimeout(() => reject(new Error("管理通道连接超时")), timeout);
     socket.addEventListener("open", () => { window.clearTimeout(timer); resolve(); }, { once: true });
-    socket.addEventListener("error", () => { window.clearTimeout(timer); reject(new Error("管理通道连接失败")); }, { once: true });
+    socket.addEventListener("error", (event) => {
+      window.clearTimeout(timer);
+      reject(event.detail || new Error("管理通道连接失败"));
+    }, { once: true });
   });
+}
+
+async function openEventChannel(url, sessionToken, onMessage) {
+  if (state.preferHTTPEvents) {
+    const stream = openHTTPEventChannel(sessionToken);
+    stream.addEventListener("message", onMessage);
+    await waitForOpen(stream);
+    return stream;
+  }
+  let socket = openEventSocket(url, sessionToken);
+  socket.addEventListener("message", onMessage);
+  try {
+    await waitForOpen(socket, 4000);
+    socket.transport = "websocket";
+    return socket;
+  } catch (cause) {
+    socket.intentional = true;
+    socket.close(1000, "switching transport");
+    console.warn("[DawnMesh client] WebSocket unavailable, switching to HTTP stream", cause);
+    state.preferHTTPEvents = true;
+  }
+  socket = openHTTPEventChannel(sessionToken);
+  socket.addEventListener("message", onMessage);
+  await waitForOpen(socket);
+  console.info("[DawnMesh client] management channel connected through HTTP stream fallback");
+  return socket;
 }
 
 function randomInvite() {
@@ -227,8 +341,7 @@ async function completeAdmission(roomId, inviteCode) {
   });
   const scalar = await operation("邀请码密钥派生", () => DawnCrypto.deriveInviteScalar(inviteCode));
   const pake = new DawnCrypto.Spake2({ isA: true, passwordScalar: scalar });
-  const socket = openEventSocket(admission.eventsUrl, admission.resumeToken);
-  await waitForOpen(socket);
+  const socket = await openEventChannel(admission.eventsUrl, admission.resumeToken, () => {});
   return new Promise((resolve, reject) => {
     let keys = null;
     let settled = false;
@@ -329,16 +442,21 @@ async function connectEvents() {
     active.socket.intentional = true;
     active.socket.close(1000, "replaced");
   }
-  const socket = openEventSocket(active.grant.eventsUrl, active.resumeToken);
+  const socket = await openEventChannel(active.grant.eventsUrl, active.resumeToken, (message) => {
+    handleManagementEvent(JSON.parse(message.data)).catch((cause) => toast(errorText(cause)));
+  });
+  if (state.active !== active || active.leaving) {
+    socket.intentional = true;
+    socket.close(1000, "room changed");
+    return;
+  }
   active.socket = socket;
-  socket.addEventListener("message", (message) => handleManagementEvent(JSON.parse(message.data)).catch((cause) => toast(errorText(cause))));
   socket.addEventListener("close", () => {
     if (state.active !== active || active.leaving || socket.intentional) return;
     setRoomStatus("reconnecting", "管理通道中断，正在恢复");
     window.clearTimeout(active.eventsReconnectTimer);
     active.eventsReconnectTimer = window.setTimeout(() => connectEvents().catch(() => scheduleFullReconnect()), 2000);
   });
-  await waitForOpen(socket);
   if (state.active !== active || active.leaving) return;
   if (active.room?.state === "connected") {
     sendEvent({ type: "media_ready", memberId: active.memberId });
@@ -380,6 +498,8 @@ async function handleManagementEvent(event) {
     toast("房间已解散");
     await cleanupRoom();
     await loadServer();
+  } else if (event.type === "error") {
+    toast(event.error || "管理操作失败");
   } else if (event.type === "pake_hello" && active.isHost) {
     await hostPakeHello(event);
   } else if (event.type === "pake_confirm" && active.isHost) {
