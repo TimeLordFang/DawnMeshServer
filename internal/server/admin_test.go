@@ -46,8 +46,8 @@ func TestAdminUIIsEmbeddedAndAPIUsesSeparateCredential(t *testing.T) {
 	if liveKitAsset.Code != http.StatusOK || !strings.Contains(liveKitAsset.Body.String(), "LivekitClient") {
 		t.Fatalf("embedded LiveKit browser SDK status=%d", liveKitAsset.Code)
 	}
-	if !strings.Contains(asset.Body.String(), "keyProvider.setKey(grant.e2eeKey)") || strings.Contains(asset.Body.String(), "setKey(material.buffer)") {
-		t.Fatal("admin listener must use the cross-SDK passphrase derivation path")
+	if !strings.Contains(asset.Body.String(), "keyProvider.setKey(new TextEncoder().encode(grant.e2eeKey))") || strings.Contains(asset.Body.String(), "keyProvider.setKey(grant.e2eeKey)") {
+		t.Fatal("admin listener must use the native-compatible media key bytes")
 	}
 
 	for name, token := range map[string]string{

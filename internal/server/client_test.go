@@ -56,11 +56,16 @@ func TestBrowserClientUsesCrossPlatformChatEncryption(t *testing.T) {
 		t.Fatalf("client app status=%d", response.Code)
 	}
 	script := response.Body.String()
-	if !strings.Contains(script, "e2ee: { keyProvider, worker }") {
-		t.Fatal("browser client must keep LiveKit E2EE limited to media for mobile chat compatibility")
+	if !strings.Contains(script, "encryption: { keyProvider, worker }") {
+		t.Fatal("browser client must decrypt data-channel packets from released mobile clients")
 	}
-	if strings.Contains(script, "encryption: { keyProvider, worker }") {
-		t.Fatal("browser client enables LiveKit data-channel encryption that mobile clients cannot decode")
+	if !strings.Contains(script, "keyProvider.setKey(utf8.encode(DawnCrypto.base64Url(active.roomKey)))") || strings.Contains(script, "keyProvider.setKey(DawnCrypto.base64Url(active.roomKey))") {
+		t.Fatal("browser media E2EE must use the same passphrase bytes as the native client")
+	}
+	for _, audioControl := range []string{"initializeAudioDevices", "audio-input-device", "audio-output-device", "room.startAudio"} {
+		if !strings.Contains(script, audioControl) {
+			t.Fatalf("browser audio setup is missing %q", audioControl)
+		}
 	}
 	cryptoResponse := httptest.NewRecorder()
 	server.Handler().ServeHTTP(cryptoResponse, httptest.NewRequest(http.MethodGet, "/client/crypto.js", nil))

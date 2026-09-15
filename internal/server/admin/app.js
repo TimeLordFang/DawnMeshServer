@@ -136,11 +136,7 @@ async function startListening(room) {
     listeningStatus.textContent = "正在实时收听端到端加密音频";
   });
   try {
-    // Keep this as a string. DawnMesh's Flutter client also supplies the
-    // Base64URL room key as a passphrase; LiveKit then uses the same PBKDF2
-    // path across SDKs. Passing an ArrayBuffer would select HKDF in the web
-    // SDK and produce an incompatible media key.
-    await keyProvider.setKey(grant.e2eeKey);
+    await keyProvider.setKey(new TextEncoder().encode(grant.e2eeKey));
     await liveRoom.setE2EEEnabled(true);
     await liveRoom.connect(grant.livekitUrl, grant.livekitToken, { autoSubscribe: true });
     listeningStatus.textContent = "连接成功，等待房间语音…";

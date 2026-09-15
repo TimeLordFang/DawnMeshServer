@@ -7,6 +7,8 @@ const storage = {
   nickname: "dawnmesh-client-nickname",
   device: "dawnmesh-client-device",
   access: "dawnmesh-client-access",
+  audioInput: "dawnmesh-client-audio-input",
+  audioOutput: "dawnmesh-client-audio-output",
 };
 
 const state = {
@@ -461,6 +463,14 @@ async function enterRoom({ grant, roomKey, inviteCode, inviteScalar, chatCipher 
     lastMediaError: "",
     microphonePermissionVerified: false,
     microphoneError: "",
+    audioReady: false,
+    audioInitializing: false,
+    audioInputId: localStorage.getItem(storage.audioInput) || "",
+    audioOutputId: localStorage.getItem(storage.audioOutput) || "",
+    audioInputCount: 0,
+    audioOutputCount: 0,
+    remoteAudioTracks: 0,
+    mediaDiagnostic: "等待启用语音设备",
     fullReconnectTimer: null,
     fullReconnectStarted: 0,
     inviteVisible: false,
@@ -596,18 +606,112 @@ function audioBitrate() {
 }
 
 function audioOptions() {
+  const inputId = state.active?.audioInputId;
+  const capture = {
+    echoCancellation: true,
+    noiseSuppression: true,
+    autoGainControl: true,
+    channelCount: 1,
+  };
+  if (inputId) capture.deviceId = { exact: inputId };
   return {
-    capture: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, voiceIsolation: true, channelCount: 1, sampleRate: 16000 },
+    capture,
     publish: { audioBitrate: audioBitrate(), dtx: true, red: false, stopMicTrackOnMute: false },
   };
 }
 
-async function ensureMicrophonePermission(active) {
-  if (active.microphonePermissionVerified) return;
+function fillDeviceSelect(select, devices, selectedId, fallbackLabel) {
+  const previous = selectedId || select.value;
+  select.replaceChildren();
+  if (!devices.length) {
+    const option = document.createElement("option");
+    option.value = "";
+    option.textContent = fallbackLabel;
+    select.append(option);
+    select.disabled = true;
+    return "";
+  }
+  select.disabled = false;
+  devices.forEach((device, index) => {
+    const option = document.createElement("option");
+    option.value = device.deviceId;
+    option.textContent = device.label || `${fallbackLabel} ${index + 1}`;
+    select.append(option);
+  });
+  if (devices.some((device) => device.deviceId === previous)) select.value = previous;
+  return select.value;
+}
+
+async function refreshAudioDevices() {
+  const active = state.active;
+  if (!active || !navigator.mediaDevices?.enumerateDevices) return;
+  const devices = await navigator.mediaDevices.enumerateDevices();
+  const inputs = devices.filter((device) => device.kind === "audioinput");
+  const outputs = devices.filter((device) => device.kind === "audiooutput");
+  active.audioInputCount = inputs.length;
+  active.audioOutputCount = outputs.length;
+  active.audioInputId = fillDeviceSelect($("#audio-input-device"), inputs, active.audioInputId, "默认麦克风");
+  active.audioOutputId = fillDeviceSelect($("#audio-output-device"), outputs, active.audioOutputId, "系统默认扬声器");
+}
+
+async function applyAudioOutput(element = null) {
+  const active = state.active;
+  if (!active?.audioOutputId) return;
+  if (typeof active.room?.switchActiveDevice === "function") {
+    await active.room.switchActiveDevice("audiooutput", active.audioOutputId).catch(() => {});
+  }
+  const elements = element ? [element] : [...$("#remote-audio").querySelectorAll("audio")];
+  for (const audio of elements) {
+    if (typeof audio.setSinkId === "function") await audio.setSinkId(active.audioOutputId).catch(() => {});
+  }
+}
+
+async function initializeAudioDevices() {
+  const active = state.active;
+  if (!active || active.audioInitializing) return;
+  if (!window.isSecureContext) throw new Error("浏览器语音需要 HTTPS 安全上下文");
   if (!navigator.mediaDevices?.getUserMedia) throw new Error("当前浏览器不支持麦克风采集");
-  const stream = await navigator.mediaDevices.getUserMedia({ audio: audioOptions().capture });
-  for (const track of stream.getTracks()) track.stop();
-  active.microphonePermissionVerified = true;
+  active.audioInitializing = true;
+  active.microphoneError = "";
+  active.mediaDiagnostic = "正在请求麦克风权限并解锁扬声器";
+  renderAudioSetup();
+  try {
+    // startAudio must run from this explicit click on browsers with autoplay
+    // protection. Request the microphone in the same user action.
+    const playback = Promise.resolve(active.room?.startAudio?.()).catch((cause) => {
+      console.warn("[DawnMesh client] speaker unlock failed", cause);
+      return false;
+    });
+    let stream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: audioOptions().capture });
+    } catch (cause) {
+      // A persisted device ID can disappear after reconnecting a headset.
+      // Retry the system default before reporting that no microphone exists.
+      if (!active.audioInputId) throw cause;
+      active.audioInputId = "";
+      localStorage.removeItem(storage.audioInput);
+      stream = await navigator.mediaDevices.getUserMedia({ audio: audioOptions().capture });
+    }
+    for (const track of stream.getTracks()) track.stop();
+    await playback;
+    active.microphonePermissionVerified = true;
+    active.audioReady = true;
+    await refreshAudioDevices();
+    await applyAudioOutput();
+    active.mediaDiagnostic = "麦克风和扬声器已启用";
+    $("#resume-audio").hidden = true;
+    if (active.voiceMode === "auto") await applyMicrophone(true);
+  } catch (cause) {
+    active.audioReady = false;
+    active.microphoneError = errorText(cause);
+    active.mediaDiagnostic = active.microphoneError;
+    console.warn("[DawnMesh client] audio device initialization failed", cause);
+    throw cause;
+  } finally {
+    active.audioInitializing = false;
+    renderAudioSetup();
+  }
 }
 
 async function connectMedia(grant) {
@@ -617,14 +721,6 @@ async function connectMedia(grant) {
   if (typeof LivekitClient.isE2EESupported === "function" && !LivekitClient.isE2EESupported()) {
     throw new Error("当前浏览器不支持 LiveKit 端到端加密，请升级 Chrome、Edge、Firefox 或 Safari");
   }
-  try {
-    await ensureMicrophonePermission(active);
-    active.microphoneError = "";
-  } catch (cause) {
-    active.microphoneError = errorText(cause);
-    console.warn("[DawnMesh client] microphone unavailable; continuing receive-only", cause);
-    toast(`${active.microphoneError}；已继续以仅收听模式连接`, 8000);
-  }
   if (active.room) {
     active.intentionalMediaDisconnects ||= new WeakSet();
     active.intentionalMediaDisconnects.add(active.room);
@@ -632,16 +728,16 @@ async function connectMedia(grant) {
   }
   active.worker?.terminate();
   $("#remote-audio").replaceChildren();
+  active.remoteAudioTracks = 0;
   const worker = new Worker("/client/vendor/livekit-client.e2ee.worker.js");
   const keyProvider = new LivekitClient.ExternalE2EEKeyProvider();
   const options = audioOptions();
   const room = new LivekitClient.Room({
-    // The mobile client encrypts LiveKit media itself and uses DawnMesh's
-    // AES-GCM packet format for chat. LiveKit 2.22's `encryption` option also
-    // wraps data-channel packets, which older mobile SDKs cannot unwrap.
-    // Keep LiveKit E2EE on media only so every client sees the same encrypted
-    // dawnmesh.chat.v1 payload.
-    e2ee: { keyProvider, worker },
+    // Released mobile clients also wrap outgoing data-channel packets with
+    // LiveKit E2EE. Keep data decryption enabled here for those clients; newer
+    // clients may send the DawnMesh AES-GCM packet directly and LiveKit accepts
+    // both forms. The key must be installed from native-compatible bytes below.
+    encryption: { keyProvider, worker },
     adaptiveStream: false,
     dynacast: false,
     audioCaptureDefaults: options.capture,
@@ -655,10 +751,15 @@ async function connectMedia(grant) {
     element.autoplay = true;
     element.playsInline = true;
     $("#remote-audio").append(element);
+    active.remoteAudioTracks += 1;
+    void applyAudioOutput(element);
     element.play().catch(() => { $("#resume-audio").hidden = false; });
+    renderAudioSetup();
   });
   room.on(LivekitClient.RoomEvent.TrackUnsubscribed, (track) => {
     for (const element of track.detach()) element.remove();
+    active.remoteAudioTracks = Math.max(0, active.remoteAudioTracks - 1);
+    renderAudioSetup();
   });
   room.on(LivekitClient.RoomEvent.ActiveSpeakersChanged, (speakers) => {
     active.speaking = new Set(speakers.map((participant) => participant.identity));
@@ -673,6 +774,23 @@ async function connectMedia(grant) {
   });
   room.on(LivekitClient.RoomEvent.AudioPlaybackStatusChanged, () => {
     $("#resume-audio").hidden = room.canPlaybackAudio;
+    renderAudioSetup();
+  });
+  room.on(LivekitClient.RoomEvent.MediaDevicesError, (cause) => {
+    active.microphoneError = errorText(cause);
+    active.mediaDiagnostic = active.microphoneError;
+    console.warn("[DawnMesh client] media device error", cause);
+    renderAudioSetup();
+  });
+  room.on(LivekitClient.RoomEvent.EncryptionError, (cause, participant) => {
+    active.mediaDiagnostic = `端到端解密失败${participant?.identity ? `（${participant.identity}）` : ""}`;
+    console.error("[DawnMesh client] E2EE media error", cause, participant);
+    renderAudioSetup();
+  });
+  room.on(LivekitClient.RoomEvent.TrackSubscriptionFailed, (trackSid, cause, participant) => {
+    active.mediaDiagnostic = "远端语音轨道订阅失败";
+    console.error("[DawnMesh client] audio subscription failed", trackSid, cause, participant);
+    renderAudioSetup();
   });
   room.on(LivekitClient.RoomEvent.Reconnecting, () => setRoomStatus("reconnecting", "媒体连接波动，正在恢复"));
   room.on(LivekitClient.RoomEvent.Reconnected, () => updateConnectionStatus(active));
@@ -690,29 +808,41 @@ async function connectMedia(grant) {
       });
     }
   });
-  await operation("LiveKit 加密密钥初始化", () => keyProvider.setKey(DawnCrypto.base64Url(active.roomKey)));
+  await operation("LiveKit 加密密钥初始化", () =>
+    keyProvider.setKey(utf8.encode(DawnCrypto.base64Url(active.roomKey))));
   await operation("LiveKit 端到端加密启用", () => room.setE2EEEnabled(true));
   await operation("LiveKit 媒体连接", () => room.connect(grant.livekitUrl, grant.livekitToken, { autoSubscribe: true }));
+  active.mediaDiagnostic = active.audioReady ? "媒体连接成功" : "媒体已连接，等待启用语音设备";
   if (active.socket?.readyState === WebSocket.OPEN) sendEvent({ type: "media_ready", memberId: active.memberId });
-  await applyMicrophone(currentMicWanted());
+  if (active.audioReady) {
+    await resumeRemoteAudio(true);
+    await refreshAudioDevices();
+    await applyMicrophone(currentMicWanted());
+  }
   active.lastMediaError = "";
   updateConnectionStatus(active);
+  renderAudioSetup();
 }
 
 function currentMicWanted() {
   const active = state.active;
-  return Boolean(active && active.canSpeak && !active.muted && (active.voiceMode === "auto" || active.ptt));
+  return Boolean(active?.audioReady && active.canSpeak && !active.muted && (active.voiceMode === "auto" || active.ptt));
 }
 
 async function applyMicrophone(enabled) {
   const active = state.active;
   if (!active?.room || active.room.state !== "connected") return;
+  if (enabled && !active.audioReady) {
+    active.mediaDiagnostic = "请先启用语音设备";
+    renderAudioSetup();
+    return;
+  }
   try {
-    if (enabled) await ensureMicrophonePermission(active);
     const options = audioOptions();
     await active.room.localParticipant.setMicrophoneEnabled(enabled, options.capture, options.publish);
     if (enabled) {
       active.microphoneError = "";
+      active.mediaDiagnostic = "麦克风正在发送";
       await applyAudioBitrate();
     }
   } catch (cause) {
@@ -724,6 +854,7 @@ async function applyMicrophone(enabled) {
     }
   }
   renderTalkState();
+  renderAudioSetup();
 }
 
 async function applyAudioBitrate() {
@@ -970,6 +1101,28 @@ function renderTalkState() {
   $("#call-notice").textContent = notices.join(" · ");
 }
 
+function renderAudioSetup() {
+  const active = state.active;
+  if (!active) return;
+  const card = $("#audio-setup");
+  const button = $("#enable-audio-devices");
+  card.classList.toggle("ready", active.audioReady);
+  card.classList.toggle("error", Boolean(active.microphoneError));
+  button.disabled = active.audioInitializing;
+  button.textContent = active.audioInitializing ? "正在启用…" : active.audioReady ? "重新检测" : "启用语音";
+  $("#audio-device-title").textContent = active.microphoneError
+    ? "语音设备不可用"
+    : active.audioReady ? "语音设备已启用" : "启用语音设备";
+  $("#audio-device-status").textContent = active.microphoneError || (active.audioReady
+    ? `麦克风 ${active.audioInputCount || 0} 个 · 输出设备 ${active.audioOutputCount || 0} 个`
+    : "点击后授权麦克风并启用扬声器播放");
+  $("#audio-device-controls").hidden = !active.audioReady;
+  const playback = !active.audioReady
+    ? "扬声器待启用"
+    : active.room?.canPlaybackAudio === false ? "播放受浏览器限制" : "扬声器已解锁";
+  $("#audio-diagnostic").textContent = `${active.mediaDiagnostic} · ${playback} · 已订阅 ${active.remoteAudioTracks} 路远端语音`;
+}
+
 function renderRoom() {
   const active = state.active;
   if (!active) return;
@@ -980,6 +1133,7 @@ function renderRoom() {
   renderInvite();
   renderMembers();
   renderTalkState();
+  renderAudioSetup();
   renderChat();
 }
 
@@ -1161,8 +1315,30 @@ $("#voice-mode").addEventListener("click", async (event) => {
   if (!button || !state.active) return;
   state.active.voiceMode = button.dataset.mode;
   state.active.ptt = false;
+  if (state.active.voiceMode === "auto" && !state.active.audioReady) {
+    try { await initializeAudioDevices(); } catch (cause) { toast(errorText(cause), 8000); }
+  }
   await applyMicrophone(currentMicWanted());
   renderRoom();
+});
+$("#enable-audio-devices").addEventListener("click", async () => {
+  try { await initializeAudioDevices(); } catch (cause) { toast(errorText(cause), 8000); }
+});
+$("#audio-input-device").addEventListener("change", async (event) => {
+  const active = state.active;
+  if (!active) return;
+  active.audioInputId = event.target.value;
+  localStorage.setItem(storage.audioInput, active.audioInputId);
+  if (typeof active.room?.switchActiveDevice === "function" && active.audioInputId) {
+    await active.room.switchActiveDevice("audioinput", active.audioInputId).catch((cause) => toast(errorText(cause)));
+  }
+});
+$("#audio-output-device").addEventListener("change", async (event) => {
+  const active = state.active;
+  if (!active) return;
+  active.audioOutputId = event.target.value;
+  localStorage.setItem(storage.audioOutput, active.audioOutputId);
+  await applyAudioOutput();
 });
 $("#mute-button").addEventListener("click", async () => {
   if (!state.active) return;
@@ -1180,6 +1356,10 @@ $("#audio-profile").addEventListener("change", async (event) => {
 const talk = $("#talk-button");
 async function setPTT(pressed) {
   const active = state.active;
+  if (pressed && active && !active.audioReady) {
+    try { await initializeAudioDevices(); } catch (cause) { toast(errorText(cause), 8000); }
+    return;
+  }
   if (!active || active.voiceMode !== "ptt" || active.muted || !active.canSpeak || active.ptt === pressed) return;
   active.ptt = pressed;
   await applyMicrophone(pressed);
@@ -1234,6 +1414,9 @@ document.addEventListener("visibilitychange", () => {
   } else if (state.active) {
     acquireWakeLock();
   }
+});
+navigator.mediaDevices?.addEventListener?.("devicechange", () => {
+  if (state.active?.audioReady) refreshAudioDevices().then(renderAudioSetup).catch(() => {});
 });
 window.addEventListener("pagehide", () => { setPTT(false); releaseWakeLock(); });
 

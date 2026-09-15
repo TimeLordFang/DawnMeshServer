@@ -112,6 +112,21 @@
                 <button data-mode="ptt" class="active" type="button"><span>按住对讲</span><small>松开发送停止</small></button>
                 <button data-mode="auto" type="button"><span>自动通话</span><small>持续检测语音</small></button>
               </div>
+              <section id="audio-setup" class="audio-setup" aria-live="polite">
+                <div class="audio-setup-summary">
+                  <span id="audio-device-indicator" class="audio-device-indicator" aria-hidden="true">♪</span>
+                  <div>
+                    <strong id="audio-device-title">启用语音设备</strong>
+                    <p id="audio-device-status">点击后授权麦克风并启用扬声器播放</p>
+                  </div>
+                  <button id="enable-audio-devices" class="secondary-button compact" type="button">启用语音</button>
+                </div>
+                <div id="audio-device-controls" class="audio-device-controls" hidden>
+                  <label>麦克风<select id="audio-input-device" aria-label="选择麦克风"></select></label>
+                  <label>扬声器<select id="audio-output-device" aria-label="选择扬声器"></select></label>
+                </div>
+                <p id="audio-diagnostic" class="audio-diagnostic"></p>
+              </section>
               <button id="talk-button" class="talk-button" type="button">
                 <span class="talk-rings" aria-hidden="true"></span>
                 <strong id="talk-label">按住说话</strong>
