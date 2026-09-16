@@ -21,11 +21,30 @@ jobs:
       - name: Check out source
         uses: actions/checkout@v7
 
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+
+      - name: Build and test frontend
+        run: |
+          npm --prefix frontend ci
+          npm --prefix frontend run build
+          npm --prefix frontend test
+          node webtests/client_crypto_test.mjs
+          git diff --exit-code -- internal/server/web
+
       - name: Set up Go
         uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
           cache: true
+
+      - name: Browser audio regressions
+        run: |
+          cd frontend
+          npx playwright install --with-deps chromium
+          npm run test:browser
 
       - name: Verify module files
         run: |
@@ -34,14 +53,6 @@ jobs:
 
       - name: Test with race detector
         run: go test -race ./...
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v6
-        with:
-          node-version: 24
-
-      - name: Test browser cryptography compatibility
-        run: node webtests/client_crypto_test.mjs
 
       - name: Run go vet
         run: go vet ./...

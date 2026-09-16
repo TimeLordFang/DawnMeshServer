@@ -1,89 +1,104 @@
-"use strict";
+import type { AdminRoom, Overview, ListenerGrant } from './types';
+import type { Member } from '../client/types';
+import * as LivekitClient from 'livekit-client';
+import workerURL from 'livekit-client/e2ee-worker?url';
+import { $ } from './dom';
+import { asError, RequestError } from '../shared/dom';
+import { mediaKey } from '../shared/media-key';
+import '../shared/style.css';
+import './style.css';
 
 const storageKey = "dawnmesh-admin-token";
-const loginView = document.querySelector("#login-view");
-const dashboardView = document.querySelector("#dashboard-view");
-const loginForm = document.querySelector("#login-form");
-const tokenInput = document.querySelector("#token-input");
-const loginButton = document.querySelector("#login-button");
-const loginError = document.querySelector("#login-error");
-const toggleToken = document.querySelector("#toggle-token");
-const logoutButton = document.querySelector("#logout-button");
-const refreshButton = document.querySelector("#refresh-button");
-const connectionState = document.querySelector("#connection-state");
-const instanceName = document.querySelector("#instance-name");
-const stats = document.querySelector("#stats");
-const rooms = document.querySelector("#rooms");
-const lastUpdated = document.querySelector("#last-updated");
-const notice = document.querySelector("#notice");
-const listeningPanel = document.querySelector("#listening-panel");
-const listeningTitle = document.querySelector("#listening-title");
-const listeningStatus = document.querySelector("#listening-status");
-const monitorAudio = document.querySelector("#monitor-audio");
-const resumeAudioButton = document.querySelector("#resume-audio-button");
-const stopListeningButton = document.querySelector("#stop-listening-button");
+const loginView = $("#login-view");
+const dashboardView = $("#dashboard-view");
+const loginForm = $("#login-form");
+const tokenInput = $("#token-input");
+const loginButton = $("#login-button");
+const loginError = $("#login-error");
+const toggleToken = $("#toggle-token");
+const logoutButton = $("#logout-button");
+const refreshButton = $("#refresh-button");
+const connectionState = $("#connection-state");
+const instanceName = $("#instance-name");
+const stats = $("#stats");
+const rooms = $("#rooms");
+const lastUpdated = $("#last-updated");
+const notice = $("#notice");
+const listeningPanel = $("#listening-panel");
+const listeningTitle = $("#listening-title");
+const listeningStatus = $("#listening-status");
+const monitorAudio = $("#monitor-audio");
+const resumeAudioButton = $("#resume-audio-button");
+const stopListeningButton = $("#stop-listening-button");
 
 let adminToken = sessionStorage.getItem(storageKey) || "";
-let refreshTimer = null;
+let refreshTimer: number | undefined;
 let loading = false;
-let activeListener = null;
-let listenerHeartbeat = null;
+let activeListener: { id: string; roomId: string; room: LivekitClient.Room; worker: Worker } | null = null;
+let startingListener = false;
+let listenerHeartbeat: number | undefined;
 
-function node(tag, className, text) {
+function node<K extends keyof HTMLElementTagNameMap>(tag: K, className = "", text?: string) {
   const element = document.createElement(tag);
   if (className) element.className = className;
   if (text !== undefined) element.textContent = text;
   return element;
 }
 
-function button(className, text, handler) {
+function button(className: string, text: string, handler: () => Promise<void>) {
   const element = node("button", className, text);
   element.type = "button";
   element.addEventListener("click", handler);
   return element;
 }
 
-async function api(path, options = {}) {
+async function api<T = { mediaUpdatePending?: boolean }>(path: string, options: RequestInit = {}): Promise<T> {
   const headers = new Headers(options.headers || {});
   headers.set("Authorization", `Bearer ${adminToken}`);
   if (options.body) headers.set("Content-Type", "application/json");
   const response = await fetch(path, { ...options, headers, cache: "no-store" });
-  let payload = {};
+  let payload: { error?: string } = {};
   try {
     payload = await response.json();
   } catch (_) {
     payload = {};
   }
   if (!response.ok) {
-    const error = new Error(payload.error || `请求失败（${response.status}）`);
+    const error = new RequestError(payload.error || `请求失败（${response.status}）`);
     error.status = response.status;
     throw error;
   }
-  return payload;
+  return payload as T;
 }
 
-function setConnection(mode, text) {
+function setConnection(mode: string, text: string) {
   connectionState.className = `connection-pill ${mode}`;
-  connectionState.lastChild.textContent = text;
+  connectionState.lastChild!.textContent = text;
 }
 
-function showNotice(message) {
+function showNotice(message: string) {
   notice.textContent = message;
   notice.hidden = !message;
 }
 
 async function resumeMonitorAudio() {
-  const elements = monitorAudio.querySelectorAll("audio");
-  const results = await Promise.allSettled(Array.from(elements, (element) => element.play()));
-  const blocked = results.some((result) => result.status === "rejected");
-  listeningStatus.textContent = blocked ? "浏览器阻止了自动播放，请再次点击启用声音。" : "正在实时收听端到端加密音频";
+  const current = activeListener;
+  if (!current) return;
+  // Invoke every playback API before yielding, while the click activation exists.
+  const playback = current.room.startAudio();
+  const elements = [...monitorAudio.querySelectorAll("audio")].map(element => element.play());
+  const results = await Promise.allSettled([playback, ...elements]);
+  if (activeListener !== current) return;
+  const blocked = results.some(result => result.status === "rejected") || !current.room.canPlaybackAudio;
+  resumeAudioButton.hidden = !blocked;
+  listeningStatus.textContent = blocked ? "点击启用声音，允许浏览器播放房间语音。" : "正在实时收听端到端加密音频";
 }
 
 async function stopListening({ notifyServer = true } = {}) {
   const current = activeListener;
   activeListener = null;
   window.clearInterval(listenerHeartbeat);
-  listenerHeartbeat = null;
+  listenerHeartbeat = undefined;
   if (!current) return;
   try {
     await current.room.disconnect();
@@ -94,69 +109,87 @@ async function stopListening({ notifyServer = true } = {}) {
   if (notifyServer) {
     try {
       await api(`/api/v1/admin/listeners/${encodeURIComponent(current.id)}`, { method: "DELETE" });
-    } catch (error) {
+    } catch (_error) { const error = asError(_error);
       if (error.status !== 404) showNotice(error.message);
     }
   }
   await loadOverview().catch(() => {});
 }
 
-async function startListening(room) {
-  if (!window.LivekitClient || typeof Worker === "undefined") {
-    throw new Error("当前浏览器不支持实时收听所需的 WebRTC/E2EE 能力");
-  }
-  if (activeListener) await stopListening();
-  const grant = await api(`/api/v1/admin/rooms/${encodeURIComponent(room.id)}/listen`, { method: "POST" });
-  const worker = new Worker("/admin/vendor/livekit-client.e2ee.worker.js");
-  const keyProvider = new LivekitClient.ExternalE2EEKeyProvider();
-  const liveRoom = new LivekitClient.Room({
-    encryption: { keyProvider, worker },
-    adaptiveStream: false,
-    dynacast: false,
-  });
-  activeListener = { id: grant.listenerId, roomId: room.id, room: liveRoom, worker };
-  listeningTitle.textContent = `正在收听“${room.name}”`;
-  listeningStatus.textContent = "建立端到端加密的只听连接…";
-  listeningPanel.hidden = false;
-  liveRoom.on(LivekitClient.RoomEvent.TrackSubscribed, (track) => {
-    if (track.kind !== LivekitClient.Track.Kind.Audio) return;
-    const element = track.attach();
-    element.autoplay = true;
-    element.controls = false;
-    monitorAudio.append(element);
-    resumeMonitorAudio().catch(() => {});
-  });
-  liveRoom.on(LivekitClient.RoomEvent.TrackUnsubscribed, (track) => {
-    for (const element of track.detach()) element.remove();
-  });
-  liveRoom.on(LivekitClient.RoomEvent.Reconnecting, () => {
-    listeningStatus.textContent = "媒体连接波动，正在自动恢复…";
-  });
-  liveRoom.on(LivekitClient.RoomEvent.Reconnected, () => {
-    listeningStatus.textContent = "正在实时收听端到端加密音频";
-  });
+async function startListening(room: AdminRoom) {
+  if (startingListener) return;
+  startingListener = true;
   try {
-    await keyProvider.setKey(new TextEncoder().encode(grant.e2eeKey));
-    await liveRoom.setE2EEEnabled(true);
-    await liveRoom.connect(grant.livekitUrl, grant.livekitToken, { autoSubscribe: true });
-    listeningStatus.textContent = "连接成功，等待房间语音…";
-    listenerHeartbeat = window.setInterval(async () => {
-      if (!activeListener) return;
-      try {
-        await api(`/api/v1/admin/listeners/${encodeURIComponent(activeListener.id)}`, { method: "PUT" });
-      } catch (error) {
-        showNotice(`实时收听已结束：${error.message}`);
-        await stopListening({ notifyServer: false });
-      }
-    }, 10000);
-    await loadOverview();
-  } catch (error) {
-    await stopListening();
-    throw error;
-  }
+    if (typeof Worker === "undefined") {
+      throw new RequestError("当前浏览器不支持实时收听所需的 WebRTC/E2EE 能力");
+    }
+    if (activeListener) await stopListening();
+    const grant = await api<ListenerGrant>(`/api/v1/admin/rooms/${encodeURIComponent(room.id)}/listen`, { method: "POST" });
+    const worker = new Worker(workerURL, { type: "module" });
+    const keyProvider = new LivekitClient.ExternalE2EEKeyProvider();
+    const liveRoom = new LivekitClient.Room({
+      encryption: { keyProvider, worker },
+      adaptiveStream: false,
+      dynacast: false,
+    });
+    activeListener = { id: grant.listenerId, roomId: room.id, room: liveRoom, worker };
+    listeningTitle.textContent = `正在收听“${room.name}”`;
+    listeningStatus.textContent = "建立端到端加密的只听连接…";
+    listeningPanel.hidden = false;
+    resumeAudioButton.hidden = false;
+    liveRoom.on(LivekitClient.RoomEvent.AudioPlaybackStatusChanged, () => {
+      if (activeListener?.room !== liveRoom) return;
+      resumeAudioButton.hidden = liveRoom.canPlaybackAudio;
+    });
+    liveRoom.on(LivekitClient.RoomEvent.EncryptionError, () => {
+      listeningStatus.textContent = "语音解密失败，请确认客户端版本与房间密钥一致。";
+    });
+    liveRoom.on(LivekitClient.RoomEvent.Disconnected, () => {
+      if (activeListener?.room === liveRoom) void stopListening();
+    });
+    liveRoom.on(LivekitClient.RoomEvent.TrackSubscribed, (track) => {
+      if (track.kind !== LivekitClient.Track.Kind.Audio) return;
+      const element = track.attach();
+      element.setAttribute("playsinline", "");
+      element.autoplay = true;
+      element.controls = false;
+      monitorAudio.append(element);
+      resumeMonitorAudio().catch(() => {});
+    });
+    liveRoom.on(LivekitClient.RoomEvent.TrackUnsubscribed, (track) => {
+      for (const element of track.detach()) element.remove();
+    });
+    liveRoom.on(LivekitClient.RoomEvent.Reconnecting, () => {
+      listeningStatus.textContent = "媒体连接波动，正在自动恢复…";
+    });
+    liveRoom.on(LivekitClient.RoomEvent.Reconnected, () => {
+      listeningStatus.textContent = "正在实时收听端到端加密音频";
+    });
+    try {
+      await keyProvider.setKey(mediaKey(grant.e2eeKey).buffer);
+      await liveRoom.setE2EEEnabled(true);
+      if (activeListener?.room !== liveRoom) { worker.terminate(); return; }
+      await liveRoom.connect(grant.livekitUrl, grant.livekitToken, { autoSubscribe: true });
+      if (activeListener?.room !== liveRoom) { await liveRoom.disconnect(); worker.terminate(); return; }
+      listeningStatus.textContent = "连接成功，等待房间语音…";
+      listenerHeartbeat = window.setInterval(async () => {
+        if (!activeListener) return;
+        try {
+          await api(`/api/v1/admin/listeners/${encodeURIComponent(activeListener.id)}`, { method: "PUT" });
+        } catch (_error) { const error = asError(_error);
+          showNotice(`实时收听已结束：${error.message}`);
+          await stopListening({ notifyServer: false });
+        }
+      }, 10000);
+      await loadOverview();
+    } catch (_error) { const error = asError(_error);
+      await stopListening();
+      throw error;
+    }
+  } finally { startingListener = false; }
 }
 
-function formatDuration(milliseconds) {
+function formatDuration(milliseconds: number) {
   const seconds = Math.max(0, Math.floor(milliseconds / 1000));
   const days = Math.floor(seconds / 86400);
   const hours = Math.floor((seconds % 86400) / 3600);
@@ -166,7 +199,7 @@ function formatDuration(milliseconds) {
   return `${minutes} 分钟`;
 }
 
-function formatTime(value) {
+function formatTime(value?: string) {
   if (!value) return "—";
   return new Intl.DateTimeFormat("zh-CN", {
     month: "2-digit",
@@ -177,7 +210,7 @@ function formatTime(value) {
   }).format(new Date(value));
 }
 
-function renderStats(data) {
+function renderStats(data: Overview) {
   const items = [
     ["房间", `${data.totals.rooms} / ${data.instance.maximumRooms}`],
     ["在线成员", `${data.totals.connectedMembers}`],
@@ -191,7 +224,7 @@ function renderStats(data) {
   }));
 }
 
-function memberRow(room, member) {
+function memberRow(room: AdminRoom, member: Member) {
   const row = node("div", "member-row");
   const identity = node("div", "member-identity");
   const avatar = node("div", "avatar", Array.from(member.nickname || "?")[0] || "?");
@@ -220,7 +253,7 @@ function memberRow(room, member) {
           });
           showNotice(result.mediaUpdatePending ? "策略已保存；媒体服务暂时不可达，将在成员重连时重新应用。" : "成员发言权限已更新。");
           await loadOverview();
-        } catch (error) {
+        } catch (_error) { const error = asError(_error);
           showNotice(error.message);
         } finally {
           action.disabled = false;
@@ -232,7 +265,7 @@ function memberRow(room, member) {
   return row;
 }
 
-function roomCard(room) {
+function roomCard(room: AdminRoom) {
   const card = node("article", "room-card");
   const heading = node("div", "room-heading");
   const titleArea = node("div");
@@ -257,7 +290,7 @@ function roomCard(room) {
           } else {
             await startListening(room);
           }
-        } catch (error) {
+        } catch (_error) { const error = asError(_error);
           showNotice(`无法开始收听：${error.message}`);
         }
       },
@@ -274,7 +307,7 @@ function roomCard(room) {
         });
         showNotice("房间名称已更新。");
         await loadOverview();
-      } catch (error) {
+      } catch (_error) { const error = asError(_error);
         showNotice(error.message);
       }
     }),
@@ -284,7 +317,7 @@ function roomCard(room) {
         await api(`/api/v1/admin/rooms/${encodeURIComponent(room.id)}`, { method: "DELETE" });
         showNotice("房间已解散。");
         await loadOverview();
-      } catch (error) {
+      } catch (_error) { const error = asError(_error);
         showNotice(error.message);
       }
     }),
@@ -308,7 +341,7 @@ function roomCard(room) {
   return card;
 }
 
-function renderRooms(data) {
+function renderRooms(data: Overview) {
   if (!data.rooms.length) {
     const empty = node("div", "empty-state");
     empty.append(node("span", "empty-icon", "☼"), node("p", "", "当前没有公网对讲房间"));
@@ -324,7 +357,7 @@ async function loadOverview() {
   refreshButton.disabled = true;
   setConnection("", "正在连接");
   try {
-    const data = await api("/api/v1/admin/overview");
+    const data = await api<Overview>("/api/v1/admin/overview");
     instanceName.textContent = data.instance.name || "DawnMesh 管理后台";
     renderStats(data);
     renderRooms(data);
@@ -333,7 +366,7 @@ async function loadOverview() {
     loginView.hidden = true;
     dashboardView.hidden = false;
     loginError.textContent = "";
-  } catch (error) {
+  } catch (_error) { const error = asError(_error);
     setConnection("offline", "连接失败");
     if (error.status === 401 || error.status === 429 || error.status === 503) {
       dashboardView.hidden = true;

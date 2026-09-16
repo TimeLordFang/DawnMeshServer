@@ -1,7 +1,9 @@
 # Third-party browser assets
 
-The embedded administration console vendors the following official browser assets so the server remains a single deployable binary:
+The embedded TypeScript browser interfaces bundle `livekit-client` 2.22.3,
+copyright LiveKit, Inc., licensed under Apache-2.0. Its SDK and matching E2EE
+worker are distributed locally inside the server executable.
 
-- `livekit-client` 2.22.3, copyright LiveKit, Inc., licensed under Apache-2.0.
-
-The upstream license text is stored at `internal/server/admin/vendor/LICENSE.livekit-client`.
+The upstream license text is stored at `frontend/LICENSE.livekit-client`.
+Transitive dependency versions and integrity hashes are recorded in
+`frontend/package-lock.json`. Vite and TypeScript are build-time dependencies.

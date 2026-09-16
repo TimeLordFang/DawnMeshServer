@@ -162,3 +162,19 @@ git push origin v0.1.0
 ## 开源协议
 
 DawnMesh Server 使用 [GNU Affero General Public License v3.0](LICENSE)（`AGPL-3.0-only`）。通过网络向用户提供本软件功能时，如果修改了本项目，AGPL 要求向这些用户提供对应源代码。LiveKit 及其他依赖继续使用各自的开源协议。
+
+### 本地一键编译与打包
+
+需要 Go（版本见 `go.mod`）、Node.js 24 或更新稳定版，以及 npm。仓库根目录执行：
+
+```bash
+./scripts/build.sh                      # 当前平台，完整检查并打包
+./scripts/build.sh --linux              # Linux amd64 + arm64
+./scripts/build.sh --os linux --arch arm64 --version 1.0.0
+```
+
+脚本会执行 `npm ci`、TypeScript 检查、Vite 构建、前端协议回归、Go 测试与 vet，然后生成 `dist/DawnMeshServer-版本-平台-架构/` 中的二进制、包含部署说明与配置示例的 `.tar.gz` 和 `dist/SHA256SUMS`。`--skip-tests` 可跳过测试，但仍进行 TypeScript 类型检查。前端及 LiveKit 加密 Worker 均由 `go:embed` 编入 `dawnmesh-server`，部署时无需 Node.js 或外置前端目录。LiveKit 媒体服务仍按原部署方式运行。
+
+前端源码位于 `frontend/`，生成资源位于 `internal/server/web/`。生成资源随源码保留，因此仍可直接 `go build ./cmd/dawnmesh-server`；修改前端后请先运行构建脚本。Docker 和 GitHub Actions 会自动重新构建前端。
+
+网页对讲支持在房间页面按住空格键通话；松开、切换窗口、页面隐藏或触摸取消立即停止按住通话。输入框及对话框不会触发此快捷键。首次发言需允许麦克风，收听不需要麦克风权限；若浏览器限制自动播放，请点击“启用声音”。公网访问须使用 HTTPS，且反向代理不能覆盖网页的麦克风权限策略。更新部署时请同步 `deploy/nginx.example.conf` 中的 `/ui/assets/` 路由，以加载新前端与加密 Worker。

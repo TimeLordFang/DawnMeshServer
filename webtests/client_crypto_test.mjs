@@ -1,6 +1,6 @@
-await import("../internal/server/client/crypto.js");
+const DawnCrypto = await import("../frontend/src/client/crypto.ts");
 
-const { Spake2, aesEncrypt, dawnHkdf, deriveInviteScalar, hexBytes, toHex } = globalThis.DawnCrypto;
+const { Spake2, aesEncrypt, dawnHkdf, deriveInviteScalar, hexBytes, toHex } = DawnCrypto;
 const scalar = (value) => BigInt(`0x${value}`);
 const password = scalar("2ee57912099d31560b3a44b1184b9b4866e904c49d12ac5042c97dca461b1a5f");
 const client = new Spake2({

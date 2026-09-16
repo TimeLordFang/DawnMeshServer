@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -39,50 +40,43 @@ func TestClientUIIsEmbeddedAndOnlyClientMayUseMicrophone(t *testing.T) {
 		t.Fatalf("admin microphone policy was relaxed: %q", policy)
 	}
 
-	for _, asset := range []string{"app.css", "app.js", "crypto.js", "vendor/livekit-client.umd.js", "vendor/livekit-client.e2ee.worker.js"} {
-		response := httptest.NewRecorder()
-		handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/client/"+asset, nil))
-		if response.Code != http.StatusOK || response.Body.Len() == 0 {
-			t.Fatalf("embedded client asset %s status=%d size=%d", asset, response.Code, response.Body.Len())
-		}
+	if csp := page.Header().Get("Content-Security-Policy"); !strings.Contains(csp, "media-src 'self' blob:") {
+		t.Fatalf("audio media policy=%q", csp)
 	}
+	assertEmbeddedPageAssets(t, handler, page.Body.String())
 }
 
-func TestBrowserClientUsesCrossPlatformChatEncryption(t *testing.T) {
-	server := testServer(t)
-	response := httptest.NewRecorder()
-	server.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/client/app.js", nil))
-	if response.Code != http.StatusOK {
-		t.Fatalf("client app status=%d", response.Code)
+// Verify the actual generated asset graph instead of matching minified source.
+func assertEmbeddedPageAssets(t *testing.T, handler http.Handler, html string) {
+	t.Helper()
+	links := regexp.MustCompile(`(?:src|href)="(/ui/assets/[^" ]+)"`).FindAllStringSubmatch(html, -1)
+	if len(links) < 3 {
+		t.Fatal("missing compiled entry, shared module or stylesheet")
 	}
-	script := response.Body.String()
-	if !strings.Contains(script, "encryption: { keyProvider, worker }") {
-		t.Fatal("browser client must decrypt data-channel packets from released mobile clients")
-	}
-	if !strings.Contains(script, "keyProvider.setKey(utf8.encode(DawnCrypto.base64Url(active.roomKey)))") || strings.Contains(script, "keyProvider.setKey(DawnCrypto.base64Url(active.roomKey))") {
-		t.Fatal("browser media E2EE must use the same passphrase bytes as the native client")
-	}
-	for _, audioControl := range []string{"initializeAudioDevices", "audio-input-device", "audio-output-device", "room.startAudio"} {
-		if !strings.Contains(script, audioControl) {
-			t.Fatalf("browser audio setup is missing %q", audioControl)
+	for _, link := range links {
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, link[1], nil))
+		if response.Code != http.StatusOK || response.Body.Len() == 0 {
+			t.Fatalf("embedded asset %s status=%d", link[1], response.Code)
 		}
 	}
-	cryptoResponse := httptest.NewRecorder()
-	server.Handler().ServeHTTP(cryptoResponse, httptest.NewRequest(http.MethodGet, "/client/crypto.js", nil))
-	if cryptoResponse.Code != http.StatusOK {
-		t.Fatalf("client crypto status=%d", cryptoResponse.Code)
+	entries, err := webAssets.ReadDir("web/assets")
+	if err != nil {
+		t.Fatal(err)
 	}
-	protocolSource := script + cryptoResponse.Body.String()
-	for _, protocolPart := range []string{
-		"DawnMesh internet chat v1",
-		"dawnmesh.chat.v1\\0${senderId}",
-		"dawnmesh.chat.v1\\0${active.memberId}",
-		"topic: \"dawnmesh.chat.v1\"",
-		"reliable: true",
-	} {
-		if !strings.Contains(protocolSource, protocolPart) {
-			t.Fatalf("browser chat protocol is missing %q", protocolPart)
+	workers := 0
+	for _, entry := range entries {
+		if strings.Contains(entry.Name(), "e2ee.worker") {
+			workers++
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/ui/assets/"+entry.Name(), nil))
+			if response.Code != http.StatusOK || !strings.Contains(response.Header().Get("Content-Type"), "javascript") {
+				t.Fatalf("worker status=%d type=%s", response.Code, response.Header().Get("Content-Type"))
+			}
 		}
+	}
+	if workers != 1 {
+		t.Fatalf("expected one SDK-matched E2EE worker, got %d", workers)
 	}
 }
 

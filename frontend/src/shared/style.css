@@ -1,0 +1,48 @@
+:root { font-family: "Avenir Next", "PingFang SC", "Microsoft YaHei", sans-serif; color: #20384d; background: #eef3f7; font-synthesis: none; --ink: #20384d; --muted: #586c7e; --line: #d7e1e9; --blue: #2463a0; --teal: #087f78; --red: #b4444a; --paper: #fff; }
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+body { margin: 0; min-width: 320px; }
+button, input, select { font: inherit; }
+button { cursor: pointer; border: 1px solid transparent; border-radius: 8px; padding: 11px 17px; font-weight: 600; color: inherit; background: #e7eef4; touch-action: manipulation; }
+button:disabled { cursor: not-allowed; opacity: .55; }
+button:hover:not(:disabled) { filter: brightness(.96); }
+button:focus-visible, input:focus-visible, select:focus-visible, a:focus-visible { outline: 3px solid #468abe; outline-offset: 4px; }
+input, select { min-width: 0; width: 100%; border: 1px solid #b6c7d4; border-radius: 7px; padding: 12px; color: var(--ink); background: white; }
+input::placeholder { color: #768794; }
+label { display: block; font-size: 14px; font-weight: 600; margin: 18px 0 8px; }
+h1, h2, h3, p { margin-top: 0; }
+h1 { font-size: 28px; line-height: 1.25; letter-spacing: -.025em; }
+h2 { font-size: 22px; line-height: 1.4; letter-spacing: -.02em; }
+h3 { font-size: 18px; }
+p { line-height: 1.65; }
+.primary-button { color: white; background: var(--blue); }
+.secondary-button { background: white; border-color: #b6c7d4; }
+.ghost-button, .text-button, .mini-button { background: transparent; color: var(--blue); }
+.danger-button, .danger { color: var(--red); background: #fbecee; }
+.icon-button { min-width: 42px; min-height: 42px; padding: 8px 12px; }
+.wide { width: 100%; margin-top: 24px; }
+.compact { font-size: 13px; }
+.muted, .subtitle, .privacy-note, .dialog-note { color: var(--muted); }
+.subtitle { max-width: 50ch; font-size: 15px; }
+.privacy-note, .dialog-note { font-size: 12px; margin: 18px 0 0; }
+.form-error { color: var(--red); font-size: 14px; margin: 12px 0 0; }
+.form-error:empty { display: none; }
+.brand-mark { display: grid; place-items: center; width: 48px; height: 48px; border-radius: 14px 14px 14px 3px; background: var(--blue); color: white; font-weight: 700; font-size: 26px; margin-bottom: 24px; }
+.brand-mark.small { width: 40px; height: 40px; font-size: 22px; margin: 0; }
+.brand-inline, .topbar-actions, .title-line { display: flex; align-items: center; gap: 14px; }
+.topbar { display: flex; align-items: center; justify-content: space-between; gap: 18px; padding: 22px 0; border-bottom: 1px solid var(--line); }
+.topbar h1 { margin: 0; font-size: 22px; }
+.eyebrow { margin: 0 0 6px; color: var(--muted); font-size: 13px; }
+.section-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 22px; }
+.section-heading h2 { margin: 0; font-size: 18px; }
+.section-heading p { margin: 0; }
+.status-pill, .connection-pill, .count-badge, .badge, .secure-badge { display: inline-flex; align-items: center; gap: 7px; border-radius: 5px; background: #e2eeed; color: #17615c; padding: 5px 9px; font-size: 12px; white-space: nowrap; }
+.status-pill span, .status-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+.empty-state { padding: 52px 24px; text-align: center; color: var(--muted); border: 1px dashed #b6c7d4; border-radius: 10px; }
+.token-row, .input-action { position: relative; }
+.token-row input, .input-action input { padding-right: 72px; }
+.token-row button, .input-action button { position: absolute; right: 4px; top: 4px; padding: 8px 12px; background: white; }
+.notice, .call-notice { color: #965326; font-size: 13px; }
+.toast { position: fixed; z-index: 20; bottom: 24px; left: 50%; transform: translateX(-50%); background: var(--ink); color: white; box-shadow: 0 8px 30px #20384d24; padding: 14px 22px; border-radius: 10px; max-width: min(600px, 92vw); }
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; } }
+@media (max-width: 600px) { .topbar { flex-wrap: wrap; } .topbar-actions { gap: 8px; } .brand-inline { gap: 10px; } h1 { font-size: 26px; } }

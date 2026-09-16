@@ -155,3 +155,31 @@ git push origin v0.1.0
 ## License
 
 DawnMesh Server is licensed under the [GNU Affero General Public License v3.0](LICENSE) (`AGPL-3.0-only`). If you modify this project and make it available to users over a network, the AGPL requires you to offer those users the corresponding source. LiveKit and other dependencies remain under their respective licenses.
+
+### Local build and packaging
+
+Install Go (see `go.mod`), Node.js 24 or newer stable, and npm, then run:
+
+```bash
+./scripts/build.sh                          # host platform, tests included
+./scripts/build.sh --linux                  # Linux amd64 and arm64
+./scripts/build.sh --os linux --arch arm64 --version 1.0.0
+```
+
+The script installs locked dependencies, checks TypeScript, builds the browser
+interfaces, runs protocol/Go tests and vet, then writes standalone executables,
+`.tar.gz` packages and `SHA256SUMS` to `dist/`. `--skip-tests` skips tests but
+retains TypeScript checking. The interfaces and LiveKit encryption worker are
+embedded in the Go executable; Node.js is only a build dependency. LiveKit still
+runs as the separate media service used by the existing deployment.
+
+Frontend sources live in `frontend/`; committed generated assets live in
+`internal/server/web/`, so a plain `go build ./cmd/dawnmesh-server` still works.
+Docker and release workflows rebuild the frontend automatically. Update your
+reverse proxy with the `/ui/assets/` route from `deploy/nginx.example.conf`.
+
+Hold Space anywhere in the room (except form inputs, other controls and open
+dialogs) to talk. Release, window blur, page hiding and pointer cancellation stop
+push-to-talk. Listening works independently of microphone permission. Click the
+sound button if autoplay is blocked. Public access requires HTTPS and a reverse
+proxy that preserves the client's microphone permissions policy.

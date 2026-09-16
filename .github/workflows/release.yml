@@ -17,22 +17,33 @@ jobs:
       - name: Check out source
         uses: actions/checkout@v7
 
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+
+      - name: Build and test frontend
+        run: |
+          npm --prefix frontend ci
+          npm --prefix frontend run build
+          npm --prefix frontend test
+          node webtests/client_crypto_test.mjs
+          git diff --exit-code -- internal/server/web
+
       - name: Set up Go
         uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
           cache: true
 
+      - name: Browser audio regressions
+        run: |
+          cd frontend
+          npx playwright install --with-deps chromium
+          npm run test:browser
+
       - name: Test
         run: go test -race ./...
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v6
-        with:
-          node-version: 24
-
-      - name: Test browser cryptography compatibility
-        run: node webtests/client_crypto_test.mjs
 
       - name: Run go vet
         run: go vet ./...
@@ -48,6 +59,19 @@ jobs:
       - name: Check out source
         uses: actions/checkout@v7
 
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+
+      - name: Build and test frontend
+        run: |
+          npm --prefix frontend ci
+          npm --prefix frontend run build
+          npm --prefix frontend test
+          node webtests/client_crypto_test.mjs
+          git diff --exit-code -- internal/server/web
+
       - name: Set up Go
         uses: actions/setup-go@v7
         with:
@@ -58,20 +82,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          version="${GITHUB_REF_NAME#v}"
-          mkdir -p dist
-          for arch in amd64 arm64; do
-            package="DawnMeshServer-${version}-linux-${arch}"
-            mkdir -p "dist/${package}"
-            CGO_ENABLED=0 GOOS=linux GOARCH="${arch}" \
-              go build -trimpath -ldflags="-s -w" \
-              -o "dist/${package}/dawnmesh-server" ./cmd/dawnmesh-server
-            cp LICENSE THIRD_PARTY_NOTICES.md README.md README.en.md config.example.env livekit.example.yaml compose.yaml "dist/${package}/"
-            cp -R deploy docs scripts "dist/${package}/"
-            tar -C dist -czf "dist/${package}.tar.gz" "${package}"
-            rm -rf "dist/${package}"
-          done
-          (cd dist && sha256sum ./*.tar.gz > SHA256SUMS)
+          ./scripts/build.sh --linux --version "${GITHUB_REF_NAME#v}" --skip-tests
 
       - name: Create or update GitHub Release
         env:
@@ -80,9 +91,9 @@ jobs:
         run: |
           set -euo pipefail
           if gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
-            gh release upload "${GITHUB_REF_NAME}" dist/* --clobber
+            gh release upload "${GITHUB_REF_NAME}" dist/*.tar.gz dist/SHA256SUMS --clobber
           else
-            gh release create "${GITHUB_REF_NAME}" dist/* \
+            gh release create "${GITHUB_REF_NAME}" dist/*.tar.gz dist/SHA256SUMS \
               --verify-tag \
               --generate-notes \
               --title "DawnMesh Server ${GITHUB_REF_NAME}"

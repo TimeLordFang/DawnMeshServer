@@ -29,26 +29,7 @@ func TestAdminUIIsEmbeddedAndAPIUsesSeparateCredential(t *testing.T) {
 		t.Fatalf("missing admin CSP: %q", csp)
 	}
 
-	asset := httptest.NewRecorder()
-	handler.ServeHTTP(asset, httptest.NewRequest(http.MethodGet, "/admin/app.js", nil))
-	if asset.Code != http.StatusOK || !strings.Contains(asset.Body.String(), "sessionStorage") {
-		t.Fatalf("embedded asset status=%d", asset.Code)
-	}
-
-	styles := httptest.NewRecorder()
-	handler.ServeHTTP(styles, httptest.NewRequest(http.MethodGet, "/admin/app.css", nil))
-	if styles.Code != http.StatusOK || !strings.Contains(styles.Body.String(), "[hidden] { display: none !important; }") {
-		t.Fatalf("embedded stylesheet does not preserve hidden view state: status=%d", styles.Code)
-	}
-
-	liveKitAsset := httptest.NewRecorder()
-	handler.ServeHTTP(liveKitAsset, httptest.NewRequest(http.MethodGet, "/admin/vendor/livekit-client.umd.js", nil))
-	if liveKitAsset.Code != http.StatusOK || !strings.Contains(liveKitAsset.Body.String(), "LivekitClient") {
-		t.Fatalf("embedded LiveKit browser SDK status=%d", liveKitAsset.Code)
-	}
-	if !strings.Contains(asset.Body.String(), "keyProvider.setKey(new TextEncoder().encode(grant.e2eeKey))") || strings.Contains(asset.Body.String(), "keyProvider.setKey(grant.e2eeKey)") {
-		t.Fatal("admin listener must use the native-compatible media key bytes")
-	}
+	assertEmbeddedPageAssets(t, handler, page.Body.String())
 
 	for name, token := range map[string]string{
 		"missing token": "",

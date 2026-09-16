@@ -77,6 +77,7 @@ func (s *Server) Close() error { close(s.stop); return s.store.close() }
 
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
+	mux.Handle("GET /ui/assets/", http.StripPrefix("/ui/assets/", embeddedUIHandler("web/assets")))
 	mux.HandleFunc("GET /admin", func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/admin/", http.StatusPermanentRedirect)
 	})
@@ -1116,7 +1117,7 @@ func securityHeaders(next http.Handler) http.Handler {
 			permissions = "camera=(), geolocation=(), microphone=(self)"
 		}
 		w.Header().Set("Permissions-Policy", permissions)
-		w.Header().Set("Content-Security-Policy", "default-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'; object-src 'none'; worker-src 'self'; connect-src 'self' https: wss:")
+		w.Header().Set("Content-Security-Policy", "default-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'; object-src 'none'; worker-src 'self'; media-src 'self' blob:; connect-src 'self' https: wss:")
 		w.Header().Set("Cache-Control", "no-store")
 		next.ServeHTTP(w, r)
 	})
