@@ -6,8 +6,8 @@ import (
 	"net/http"
 )
 
-// Built by `npm --prefix frontend run build`. Committed assets also allow a
-// plain go build without Node.js on the deployment/build machine.
+// Built by `npm --prefix frontend run build` before Go compilation. Use
+// scripts/build.sh for local release builds so the embedded UI is always fresh.
 //
 //go:embed web
 var webAssets embed.FS

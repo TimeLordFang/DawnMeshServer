@@ -10,17 +10,18 @@ function deferred() {
   return { promise, resolve };
 }
 
-test('browser media key matches Dart base64UrlEncode, including padding and HKDF input', async () => {
+test('browser media passphrase matches Dart base64UrlEncode and native PBKDF2 defaults', async () => {
   const raw = Uint8Array.from({ length: 32 }, (_, index) => index);
   const expected = Buffer.from(raw).toString('base64url') + '=';
   const key = mediaKey(base64Url(raw));
-  assert.equal(new TextDecoder().decode(key), expected);
-  assert.deepEqual(key, mediaKey(expected));
-  const importKey = (bytes: Uint8Array<ArrayBuffer>) => crypto.subtle.importKey('raw', bytes, 'HKDF', false, ['deriveBits']);
-  const params = { name: 'HKDF', hash: 'SHA-256', salt: new TextEncoder().encode('LKFrameEncryptionKey'), info: new TextEncoder().encode('test') };
-  const native = await crypto.subtle.deriveBits(params, await importKey(new TextEncoder().encode(expected)), 256);
-  const browser = await crypto.subtle.deriveBits(params, await importKey(key), 256);
-  assert.deepEqual(new Uint8Array(browser), new Uint8Array(native));
+  assert.equal(key, expected);
+  assert.equal(key, mediaKey(expected));
+  const material = await crypto.subtle.importKey('raw', new TextEncoder().encode(key), 'PBKDF2', false, ['deriveBits']);
+  const params = { name: 'PBKDF2', hash: 'SHA-256', salt: new TextEncoder().encode('LKFrameEncryptionKey'), iterations: 100000 } as const;
+  const browser = await crypto.subtle.deriveBits(params, material, 128);
+  const nativeDefault = await crypto.subtle.deriveBits(params,
+    await crypto.subtle.importKey('raw', new TextEncoder().encode(expected), 'PBKDF2', false, ['deriveBits']), 128);
+  assert.deepEqual(new Uint8Array(browser), new Uint8Array(nativeDefault));
 });
 
 test('release during pending unmute immediately closes capture and remains muted after completion', async () => {

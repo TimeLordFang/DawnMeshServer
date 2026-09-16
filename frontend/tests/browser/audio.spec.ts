@@ -51,6 +51,7 @@ test('first press released before permission resolves stays silent and leaving s
   await expect(page.locator('#audio-device-title')).toHaveText('麦克风已就绪');
   expect(await page.evaluate(() => (window as any).__track.mediaStreamTrack.enabled)).toBe(false);
   expect(await page.evaluate(() => (window as any).__publishedMuted)).toBe(true);
+  page.once('dialog', dialog => dialog.accept());
   await page.locator('#leave-room').click();
   await expect.poll(() => page.evaluate(() => (window as any).__track.mediaStreamTrack.readyState)).toBe('ended');
 });
@@ -58,10 +59,31 @@ test('first press released before permission resolves stays silent and leaving s
 test('denied microphone still allows listening and has a retry path', async ({ page }) => {
   await enterRoom(page);
   await page.evaluate(() => { navigator.mediaDevices.getUserMedia = async () => { throw new DOMException('denied', 'NotAllowedError'); }; });
+  await page.locator('#enable-listening').click();
+  await expect(page.locator('#listening-title')).toHaveText('收听已启用');
   await page.locator('#enable-audio-devices').click();
   await expect(page.locator('#audio-device-status')).toContainText('麦克风权限');
   await expect(page.locator('#enable-audio-devices')).toBeEnabled();
   expect(await page.evaluate(() => (window as any).__room.canPlaybackAudio)).toBe(true);
+});
+
+test('computer with speakers and no microphone can activate listening', async ({ page }) => {
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator.mediaDevices, 'enumerateDevices', {
+      configurable: true,
+      value: async () => [{ deviceId: 'speaker', groupId: 'output', kind: 'audiooutput', label: 'Built-in Output', toJSON() { return this; } }],
+    });
+    Object.defineProperty(navigator.mediaDevices, 'getUserMedia', {
+      configurable: true,
+      value: async () => { throw new DOMException('no microphone', 'NotFoundError'); },
+    });
+  });
+  await enterRoom(page);
+  await expect(page.locator('#audio-device-title')).toHaveText('未检测到麦克风');
+  await expect(page.locator('#audio-device-status')).toContainText('仍可正常收听');
+  await page.locator('#enable-listening').click();
+  await expect(page.locator('#listening-title')).toHaveText('收听已启用');
+  await expect(page.locator('#audio-output-device')).toHaveValue('speaker');
 });
 
 test('mobile room and setup fit without horizontal scrolling; admin loads', async ({ page }) => {
@@ -120,11 +142,12 @@ test('permission completing after leave releases the acquired hardware', async (
   });
   await page.locator('#enable-audio-devices').click();
   await expect.poll(() => page.evaluate(() => Boolean((window as any).__pendingCapture))).toBe(true);
+  page.once('dialog', dialog => dialog.accept());
   await page.locator('#leave-room').click();
   await expect.poll(() => page.evaluate(() => (window as any).__pendingCapture.getTracks()[0].readyState)).toBe('ended');
 });
 
-test('actual LiveKit SDK and matching worker initialize E2EE with native-compatible bytes', async ({ page }) => {
+test('actual LiveKit SDK and matching worker initialize media-only E2EE with native-compatible PBKDF2', async ({ page }) => {
   await setupRoom(page);
   await page.unroute(/\/node_modules\/\.vite\/deps\/livekit-client\.js/);
   await page.goto('/ui/client/');
@@ -135,9 +158,9 @@ test('actual LiveKit SDK and matching worker initialize E2EE with native-compati
     const workerModule = await import(workerPath);
     const worker = new Worker(workerModule.default, { type: 'module' });
     const keyProvider = new sdk.ExternalE2EEKeyProvider();
-    const room = new sdk.Room({ encryption: { keyProvider, worker } });
+    const room = new sdk.Room({ e2ee: { keyProvider, worker } });
     try {
-      await keyProvider.setKey(new TextEncoder().encode('AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=').buffer);
+      await keyProvider.setKey('AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=');
       // The SDK only posts the enable message after an identity is known.
       // Normally room.connect supplies it; this isolated worker test sets it.
       room.localParticipant.identity = 'worker-test';
@@ -154,6 +177,38 @@ test('actual LiveKit SDK and matching worker initialize E2EE with native-compati
     } finally { await room.disconnect(); worker.terminate(); }
   });
   expect(ready).toBe(true);
+});
+
+test('room uses media-only E2EE and the padded PBKDF2 passphrase expected by mobile', async ({ page }) => {
+  await enterRoom(page);
+  const result = await page.evaluate(() => ({
+    mediaOnly: Boolean((window as any).__roomOptions.e2ee) && !(window as any).__roomOptions.encryption,
+    key: (window as any).__mediaKey,
+  }));
+  expect(result.mediaOnly).toBe(true);
+  expect(result.key).toMatch(/=$/);
+});
+
+test('leaving asks for confirmation and cancellation keeps the room open', async ({ page }) => {
+  await enterRoom(page);
+  page.once('dialog', dialog => dialog.dismiss());
+  await page.locator('#leave-room').click();
+  await expect(page.locator('#room-view')).toBeVisible();
+  page.once('dialog', dialog => dialog.accept());
+  await page.locator('#leave-room').click();
+  await expect(page.locator('#lobby-view')).toBeVisible();
+});
+
+test('saved server token restores the lobby after refresh', async ({ page }) => {
+  await setupRoom(page);
+  await page.goto('/ui/client/');
+  await page.getByLabel('昵称', { exact: true }).fill('林间');
+  await page.locator('#access-token-input').fill('saved-token');
+  await page.getByRole('button', { name: '连接服务器' }).click();
+  await expect(page.locator('#lobby-view')).toBeVisible();
+  await page.reload();
+  await expect(page.locator('#lobby-view')).toBeVisible();
+  await expect(page.locator('#server-name')).toHaveText('曙光之声');
 });
 
 test('blocked remote audio remains recoverable without enabling the microphone', async ({ page }) => {

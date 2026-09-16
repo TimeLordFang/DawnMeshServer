@@ -384,7 +384,7 @@ async function createRoom() {
       maxParticipants: Number($("#max-participants-input").value),
       hostDisconnectTimeoutMinutes: Number($("#host-timeout-input").value),
     };
-    if ($("#allow-monitoring").checked) body.monitoringKey = new TextDecoder().decode(mediaKey(DawnCrypto.base64Url(roomKey)));
+    if ($("#allow-monitoring").checked) body.monitoringKey = mediaKey(DawnCrypto.base64Url(roomKey));
     const grant = await operation("服务端创建房间", () => api<Grant>("/api/v1/rooms", { method: "POST", body: JSON.stringify(body) }));
     $("#create-dialog").close();
     await enterRoom({ grant, roomKey, inviteCode, inviteScalar, chatCipher });
@@ -484,7 +484,7 @@ async function enterRoom({ grant, roomKey, inviteCode, inviteScalar, chatCipher 
     audioInputCount: 0,
     audioOutputCount: 0,
     remoteAudioTracks: 0,
-    mediaDiagnostic: "等待启用语音设备",
+    mediaDiagnostic: "正在连接媒体",
     fullReconnectTimer: undefined,
     fullReconnectStarted: 0,
     inviteVisible: false,
@@ -803,11 +803,10 @@ async function connectMedia(grant: Grant) {
   const keyProvider = new LivekitClient.ExternalE2EEKeyProvider();
   const options = audioOptions();
   const room = new LivekitClient.Room({
-    // Released mobile clients also wrap outgoing data-channel packets with
-    // LiveKit E2EE. Keep data decryption enabled here for those clients; newer
-    // clients may send the DawnMesh AES-GCM packet directly and LiveKit accepts
-    // both forms. The key must be installed from native-compatible bytes below.
-    encryption: { keyProvider, worker },
+    // Mobile clients apply LiveKit E2EE to media only. Chat has its own
+    // AES-GCM envelope, so keeping the data channel outside LiveKit E2EE makes
+    // browser and mobile packets symmetric.
+    e2ee: { keyProvider, worker },
     adaptiveStream: false,
     dynacast: false,
     audioCaptureDefaults: options.capture,
@@ -865,6 +864,11 @@ async function connectMedia(grant: Grant) {
     console.error("[DawnMesh client] E2EE media error", cause, participant);
     renderAudioSetup();
   });
+  room.on(LivekitClient.RoomEvent.ParticipantEncryptionStatusChanged, (enabled) => {
+    if (state.active !== active || active.room !== room || active.leaving || !enabled) return;
+    active.mediaDiagnostic = "端到端加密已就绪";
+    renderAudioSetup();
+  });
   room.on(LivekitClient.RoomEvent.TrackSubscriptionFailed, (trackSid, cause, participant) => {
     if (state.active !== active || active.room !== room || active.leaving) return;
     active.mediaDiagnostic = "远端语音轨道订阅失败";
@@ -898,18 +902,18 @@ async function connectMedia(grant: Grant) {
     }
   });
   await operation("LiveKit 加密密钥初始化", () =>
-    keyProvider.setKey(mediaKey(DawnCrypto.base64Url(active.roomKey)).buffer));
+    keyProvider.setKey(mediaKey(DawnCrypto.base64Url(active.roomKey))));
   await operation("LiveKit 端到端加密启用", () => room.setE2EEEnabled(true));
   if (state.active !== active || active.leaving || active.room !== room) { worker.terminate(); return; }
   await operation("LiveKit 媒体连接", () => room.connect(grant.livekitUrl, grant.livekitToken, { autoSubscribe: true }));
   if (state.active !== active || active.leaving || active.room !== room) {
     await room.disconnect(); worker.terminate(); return;
   }
-  active.mediaDiagnostic = active.audioReady ? "媒体连接成功" : "媒体已连接，等待启用语音设备";
+  active.mediaDiagnostic = active.audioReady ? "媒体连接成功" : "媒体已连接，可直接启用收听";
   if (active.socket?.readyState === WebSocket.OPEN) sendEvent({ type: "media_ready", memberId: active.memberId });
+  await refreshAudioDevices().catch(() => {});
   if (active.audioReady) {
     await resumeRemoteAudio(true);
-    await refreshAudioDevices();
     await applyMicrophone(currentMicWanted());
   }
   active.lastMediaError = "";
@@ -1195,18 +1199,26 @@ function renderAudioSetup() {
   const card = $("#audio-setup");
   const button = $("#enable-audio-devices");
   card.classList.toggle("ready", active.audioReady);
-  card.classList.toggle("error", Boolean(active.microphoneError));
+  card.classList.remove("error");
+  $("#microphone-setup").classList.toggle("error", Boolean(active.microphoneError));
   button.disabled = active.audioInitializing;
-  button.textContent = active.audioInitializing ? "正在启用…" : active.audioReady ? "检查声音" : "启用麦克风";
+  button.textContent = active.audioInitializing ? "正在启用…" : active.audioReady ? "重新检测" : "启用麦克风";
   $("#audio-device-title").textContent = active.microphoneError
-    ? "麦克风未就绪"
-    : active.audioReady ? "麦克风已就绪" : "启用麦克风";
+    ? (active.audioInputCount === 0 ? "未检测到麦克风" : "麦克风未就绪")
+    : active.audioReady ? "麦克风已就绪" : (active.audioInputCount === 0 ? "未检测到麦克风" : "麦克风");
   $("#audio-device-status").textContent = active.microphoneError || (active.audioReady
     ? `麦克风 ${active.audioInputCount || 0} 个 · 输出设备 ${active.audioOutputCount || 0} 个`
-    : "启用麦克风以发言；收听无需麦克风权限");
-  $("#audio-device-controls").hidden = !active.audioReady;
-  const playback = active.room?.canPlaybackAudio && !active.playbackBlocked ? "扬声器可播放" : "点击启用声音以收听";
-  $("#resume-audio").hidden = !active.room || (active.room.canPlaybackAudio && !active.playbackBlocked);
+    : active.audioInputCount === 0 ? "仍可正常收听；连接麦克风后可发言" : "仅在需要发言时启用麦克风");
+  $("#audio-device-controls").hidden = !active.room || active.room.state !== "connected";
+  const listeningReady = Boolean(active.room?.canPlaybackAudio && !active.playbackBlocked);
+  $("#listening-title").textContent = listeningReady ? "收听已启用" : "收听声音";
+  $("#listening-status").textContent = listeningReady
+    ? `扬声器可播放 · 已订阅 ${active.remoteAudioTracks} 路远端语音`
+    : "点击启用收听，不需要麦克风权限";
+  $("#enable-listening").textContent = listeningReady ? "已启用" : "启用收听";
+  $("#enable-listening").disabled = listeningReady;
+  const playback = listeningReady ? "扬声器可播放" : "等待启用收听";
+  $("#resume-audio").hidden = !active.room || listeningReady;
   $("#audio-diagnostic").textContent = `${active.mediaDiagnostic} · ${playback} · 已订阅 ${active.remoteAudioTracks} 路远端语音`;
 }
 
@@ -1236,7 +1248,7 @@ async function resumeRemoteAudio(quiet = false) {
   const ready = !failed && room.canPlaybackAudio;
   active.playbackBlocked = !ready;
   $("#resume-audio").hidden = ready;
-  if (!ready && !quiet) toast("浏览器尚未允许播放，请再次点击启用声音");
+  if (!ready && !quiet) toast("浏览器尚未允许播放，请再次点击启用收听");
   renderAudioSetup();
   return ready;
 }
@@ -1322,7 +1334,8 @@ async function cleanupRoom() {
 async function leaveRoom(endRoom = false) {
   const active = state.active!;
   if (!active) return;
-  if (endRoom && !confirm("确定立即解散房间吗？所有成员都会断开。")) return;
+  const question = endRoom ? "确定立即解散房间吗？所有成员都会断开。" : "确定离开当前房间吗？";
+  if (!confirm(question)) return;
   try {
     const path = endRoom
       ? `/api/v1/rooms/${encodeURIComponent(active.summary.id)}`
@@ -1398,6 +1411,9 @@ $("#leave-room").addEventListener("click", () => leaveRoom(false));
 $("#end-room").addEventListener("click", () => leaveRoom(true));
 $("#toggle-invite").addEventListener("click", () => state.active?.inviteVisible ? hideInvite() : revealInvite());
 $("#resume-audio").addEventListener("click", async () => {
+  await resumeRemoteAudio();
+});
+$("#enable-listening").addEventListener("click", async () => {
   await resumeRemoteAudio();
 });
 $("#voice-mode").addEventListener("click", async (event) => {
@@ -1505,7 +1521,7 @@ document.addEventListener("visibilitychange", () => {
   }
 });
 navigator.mediaDevices?.addEventListener?.("devicechange", () => {
-  if (state.active?.audioReady) refreshAudioDevices().then(renderAudioSetup).catch(() => {});
+  if (state.active) refreshAudioDevices().then(renderAudioSetup).catch(() => {});
 });
 window.addEventListener("pagehide", () => {
   if (state.active) {
@@ -1519,4 +1535,10 @@ window.addEventListener("pagehide", () => {
 if (!window.isSecureContext) {
   $("#setup-error").textContent = "网页对讲需要 HTTPS 安全上下文才能使用麦克风和端到端加密。";
   $("#connect-server-button").disabled = true;
+} else if (state.nickname && state.accessToken) {
+  const button = $("#connect-server-button");
+  setBusy(button, true, "正在恢复…");
+  loadServer()
+    .catch((cause) => { $("#setup-error").textContent = errorText(cause); })
+    .finally(() => setBusy(button, false));
 }

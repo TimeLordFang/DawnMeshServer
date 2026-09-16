@@ -79,6 +79,7 @@ docker compose up -d --build
 - P-256 SPAKE2 邀请码验证，邀请码不发送给服务器
 - LiveKit WebRTC 语音与 E2EE、加密文字消息
 - 按住说话和自动通话、清晰/平衡/省流三档音质
+- 收听与麦克风独立启用；没有输入设备时仍可使用扬声器收听
 - 成员头像、发言状态和稳定的加入顺序
 - 房主改名、成员封麦/开麦、转让房主和解散房间
 - 管理通道优先使用 WebSocket，并在代理拒绝升级时自动切换到普通 HTTPS 流；媒体断线时独立刷新短时令牌，并在十分钟成员保留窗口内自动恢复
@@ -86,7 +87,7 @@ docker compose up -d --build
 
 浏览器麦克风和 Web Crypto 要求 HTTPS 安全上下文；`localhost` 仅用于本地开发。Safari、Chrome、Edge、Firefox 对 WebRTC E2EE、音频后台运行和输出设备切换的支持存在差异。移动浏览器进入锁屏或被系统回收后无法提供与 Android 前台服务相同的后台持续性，长时间对讲仍建议使用 Android App。网页端的 WebSocket 凭证通过 `Sec-WebSocket-Protocol` 请求头传递，Nginx 等反向代理不要记录该请求头。
 
-访问凭证只写入当前标签页的 `sessionStorage`，昵称和随机设备标识写入 `localStorage`。邀请码、房间密钥和成员恢复令牌只保存在页面内存中；刷新或关闭页面后不会恢复这些敏感值。
+访问凭证只写入当前标签页的 `sessionStorage`，昵称和随机设备标识写入 `localStorage`。刷新页面后会自动恢复到服务器房间列表；邀请码、房间密钥和成员恢复令牌仍只保存在页面内存中，因此不会自动重新进入之前的房间。关闭标签页后访问凭证也会清除。
 
 ## 管理后台
 
@@ -175,6 +176,6 @@ DawnMesh Server 使用 [GNU Affero General Public License v3.0](LICENSE)（`AGPL
 
 脚本会执行 `npm ci`、TypeScript 检查、Vite 构建、前端协议回归、Go 测试与 vet，然后生成 `dist/DawnMeshServer-版本-平台-架构/` 中的二进制、包含部署说明与配置示例的 `.tar.gz` 和 `dist/SHA256SUMS`。`--skip-tests` 可跳过测试，但仍进行 TypeScript 类型检查。前端及 LiveKit 加密 Worker 均由 `go:embed` 编入 `dawnmesh-server`，部署时无需 Node.js 或外置前端目录。LiveKit 媒体服务仍按原部署方式运行。
 
-前端源码位于 `frontend/`，生成资源位于 `internal/server/web/`。生成资源随源码保留，因此仍可直接 `go build ./cmd/dawnmesh-server`；修改前端后请先运行构建脚本。Docker 和 GitHub Actions 会自动重新构建前端。
+前端源码位于 `frontend/`，生成资源写入 `internal/server/web/`，该目录属于构建产物，不纳入 Git。请使用 `./scripts/build.sh` 完成正式构建；若需要手动执行 `go build`、`go test` 或 `go vet`，必须先运行 `npm --prefix frontend ci && npm --prefix frontend run build`。Docker 和 GitHub Actions 会自动完成这一步。
 
-网页对讲支持在房间页面按住空格键通话；松开、切换窗口、页面隐藏或触摸取消立即停止按住通话。输入框及对话框不会触发此快捷键。首次发言需允许麦克风，收听不需要麦克风权限；若浏览器限制自动播放，请点击“启用声音”。公网访问须使用 HTTPS，且反向代理不能覆盖网页的麦克风权限策略。更新部署时请同步 `deploy/nginx.example.conf` 中的 `/ui/assets/` 路由，以加载新前端与加密 Worker。
+网页对讲支持在房间页面按住空格键通话；松开、切换窗口、页面隐藏或触摸取消立即停止按住通话。输入框及对话框不会触发此快捷键。首次发言需允许麦克风，收听不需要麦克风权限；若浏览器限制自动播放，请点击“启用收听”。公网访问须使用 HTTPS，且反向代理不能覆盖网页的麦克风权限策略。更新部署时请同步 `deploy/nginx.example.conf` 中的 `/ui/assets/` 路由，以加载新前端与加密 Worker。

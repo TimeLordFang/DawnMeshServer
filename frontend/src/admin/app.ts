@@ -128,7 +128,7 @@ async function startListening(room: AdminRoom) {
     const worker = new Worker(workerURL, { type: "module" });
     const keyProvider = new LivekitClient.ExternalE2EEKeyProvider();
     const liveRoom = new LivekitClient.Room({
-      encryption: { keyProvider, worker },
+      e2ee: { keyProvider, worker },
       adaptiveStream: false,
       dynacast: false,
     });
@@ -166,7 +166,7 @@ async function startListening(room: AdminRoom) {
       listeningStatus.textContent = "正在实时收听端到端加密音频";
     });
     try {
-      await keyProvider.setKey(mediaKey(grant.e2eeKey).buffer);
+      await keyProvider.setKey(mediaKey(grant.e2eeKey));
       await liveRoom.setE2EEEnabled(true);
       if (activeListener?.room !== liveRoom) { worker.terminate(); return; }
       await liveRoom.connect(grant.livekitUrl, grant.livekitToken, { autoSubscribe: true });

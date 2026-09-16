@@ -32,7 +32,6 @@ jobs:
           npm --prefix frontend run build
           npm --prefix frontend test
           node webtests/client_crypto_test.mjs
-          git diff --exit-code -- internal/server/web
 
       - name: Set up Go
         uses: actions/setup-go@v7

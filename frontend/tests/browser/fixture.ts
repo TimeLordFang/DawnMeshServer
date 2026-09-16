@@ -30,7 +30,7 @@ export async function setupRoom(page: Page) {
       export const Track = { Kind: { Audio: 'audio' }, Source: { Microphone: 'microphone' } };
       export const RoomEvent = new Proxy({}, { get: (_, key) => key });
       export const isE2EESupported = () => true;
-      export class ExternalE2EEKeyProvider { async setKey(key) { window.__mediaKey = Array.from(new Uint8Array(key)); } }
+      export class ExternalE2EEKeyProvider { async setKey(key) { window.__mediaKey = key; } }
       export class LocalAudioTrack {
         constructor(track) { this.mediaStreamTrack = track; window.__track = this; }
         async mute() { this.mediaStreamTrack.enabled = false; }
@@ -39,8 +39,9 @@ export async function setupRoom(page: Page) {
       }
       export class Room {
         state = 'disconnected'; canPlaybackAudio = false; handlers = {};
-        constructor() {
+        constructor(options) {
           window.__room = this;
+          window.__roomOptions = options;
           this.localParticipant = {
             permissions: { canPublish: true }, audioTrackPublications: new Map(),
             publishTrack: async track => { window.__publishedMuted = !track.mediaStreamTrack.enabled; },

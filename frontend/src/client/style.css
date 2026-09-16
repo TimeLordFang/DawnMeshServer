@@ -56,6 +56,8 @@
 .audio-setup { margin-top: 18px; padding: 16px; border: 1px solid #c4d3df; border-radius: 9px; }
 .audio-setup-summary { display: flex; align-items: center; gap: 10px; }
 .audio-setup-summary > div { flex: 1; }
+.microphone-setup { margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--line); }
+.microphone-setup.error strong, .microphone-setup.error .audio-device-indicator { color: var(--red); }
 .audio-device-indicator { font-size: 23px; color: var(--blue); }
 .audio-setup strong { font-size: 13px; }
 .audio-setup p { margin: 4px 0 0; font-size: 11px; color: var(--muted); }

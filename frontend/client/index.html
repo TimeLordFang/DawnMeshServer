@@ -75,7 +75,7 @@
             </div>
             <p id="room-connection-state" class="room-status"><span></span>正在连接</p>
           </div>
-          <button id="resume-audio" class="secondary-button compact" type="button" hidden>启用声音</button>
+          <button id="resume-audio" class="secondary-button compact" type="button" hidden>启用收听</button>
         </header>
 
         <div class="room-layout">
@@ -111,13 +111,21 @@
                 <button id="end-room" class="control-button danger" type="button" hidden><span>×</span><small>解散</small></button>
               </div>
               <section id="audio-setup" class="audio-setup" aria-live="polite">
-                <div class="audio-setup-summary">
-                  <span id="audio-device-indicator" class="audio-device-indicator" aria-hidden="true">♪</span>
+                <div class="audio-setup-summary listening-setup">
+                  <span class="audio-device-indicator" aria-hidden="true">◖</span>
                   <div>
-                    <strong id="audio-device-title">启用语音设备</strong>
-                    <p id="audio-device-status">点击后授权麦克风并启用扬声器播放</p>
+                    <strong id="listening-title">收听声音</strong>
+                    <p id="listening-status">启用扬声器即可收听，不需要麦克风</p>
                   </div>
-                  <button id="enable-audio-devices" class="secondary-button compact" type="button">启用语音</button>
+                  <button id="enable-listening" class="secondary-button compact" type="button">启用收听</button>
+                </div>
+                <div id="microphone-setup" class="audio-setup-summary microphone-setup">
+                  <span id="audio-device-indicator" class="audio-device-indicator" aria-hidden="true">⌁</span>
+                  <div>
+                    <strong id="audio-device-title">麦克风</strong>
+                    <p id="audio-device-status">仅在需要发言时授权</p>
+                  </div>
+                  <button id="enable-audio-devices" class="secondary-button compact" type="button">启用麦克风</button>
                 </div>
                 <div id="audio-device-controls" class="audio-device-controls" hidden>
                   <label>麦克风<select id="audio-input-device" aria-label="选择麦克风"></select></label>

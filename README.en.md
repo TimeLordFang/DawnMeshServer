@@ -73,13 +73,13 @@ Add `DAWNMESH_PUBLIC_URL` in the Android app's network intercom settings and use
 
 After deployment, open `https://talk.example.com/client/`. The web client uses the server that served the page. Enter `DAWNMESH_ACCESS_TOKEN` on the initial screen when the deployment requires it.
 
-The browser and Android public-room clients share the same protocol and rooms. The web client can create and discover rooms, join with a six-digit invite, use push-to-talk or automatic voice, switch among clarity/balanced/data-saver profiles, exchange encrypted text messages, and show speaking state with stable member avatars. Hosts can rename or end the room, control another member's microphone permission, and transfer ownership. The management channel prefers WebSocket and automatically falls back to an authenticated HTTPS stream when a proxy rejects the upgrade. Media recovery independently refreshes its short-lived grant within the existing ten-minute member retention window.
+The browser and Android public-room clients share the same protocol and rooms. The web client can create and discover rooms, join with a six-digit invite, use push-to-talk or automatic voice, switch among clarity/balanced/data-saver profiles, exchange encrypted text messages, and show speaking state with stable member avatars. Listening and microphone capture are enabled separately, so a computer without an input device can still receive room audio. Hosts can rename or end the room, control another member's microphone permission, and transfer ownership. The management channel prefers WebSocket and automatically falls back to an authenticated HTTPS stream when a proxy rejects the upgrade. Media recovery independently refreshes its short-lived grant within the existing ten-minute member retention window.
 
 Invite authentication uses the same scrypt and P-256 SPAKE2 transcript as Android, and the invite never reaches the server. LiveKit media uses the same E2EE room key; chat uses a purpose-separated AES-256-GCM key.
 
 Microphone capture and Web Crypto require an HTTPS secure context (`localhost` is allowed for development). Browser support for WebRTC E2EE, background audio, and output-device selection varies. A mobile browser may suspend or terminate a page after screen lock, so the Android app remains the recommended client for long-running background intercom use. WebSocket credentials are carried in the `Sec-WebSocket-Protocol` request header; configure Nginx and other reverse proxies not to log that header.
 
-The access credential is kept in tab-scoped `sessionStorage`; the nickname and random device identifier are stored in `localStorage`. The invite, room key, and rotating resume token remain in page memory and are discarded on refresh or close.
+The access credential is kept in tab-scoped `sessionStorage`; the nickname and random device identifier are stored in `localStorage`. Refreshing automatically restores the server lobby. The invite, room key, and rotating resume token remain in page memory, so the previous room is not rejoined after a refresh. Closing the tab also clears the access credential.
 
 ## Admin console
 
@@ -173,10 +173,12 @@ retains TypeScript checking. The interfaces and LiveKit encryption worker are
 embedded in the Go executable; Node.js is only a build dependency. LiveKit still
 runs as the separate media service used by the existing deployment.
 
-Frontend sources live in `frontend/`; committed generated assets live in
-`internal/server/web/`, so a plain `go build ./cmd/dawnmesh-server` still works.
-Docker and release workflows rebuild the frontend automatically. Update your
-reverse proxy with the `/ui/assets/` route from `deploy/nginx.example.conf`.
+Frontend sources live in `frontend/`; generated assets are written to
+`internal/server/web/` and are not tracked by Git. Use `./scripts/build.sh` for
+release builds. Before running `go build`, `go test`, or `go vet` manually, run
+`npm --prefix frontend ci && npm --prefix frontend run build`. Docker and GitHub
+Actions perform this step automatically. Update your reverse proxy with the
+`/ui/assets/` route from `deploy/nginx.example.conf`.
 
 Hold Space anywhere in the room (except form inputs, other controls and open
 dialogs) to talk. Release, window blur, page hiding and pointer cancellation stop

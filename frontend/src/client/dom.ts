@@ -30,6 +30,10 @@ interface Elements {
   "#member-grid": HTMLElement;
   "#voice-mode": HTMLElement;
   "#audio-setup": HTMLElement;
+  "#listening-title": HTMLElement;
+  "#listening-status": HTMLElement;
+  "#enable-listening": HTMLButtonElement;
+  "#microphone-setup": HTMLElement;
   "#audio-device-indicator": HTMLElement;
   "#audio-device-title": HTMLElement;
   "#audio-device-status": HTMLElement;

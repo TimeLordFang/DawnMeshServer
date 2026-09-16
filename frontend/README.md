@@ -16,12 +16,11 @@ npm run test:browser # local Chrome; CI uses Playwright Chromium
 SPAKE2/chat encryption. `src/admin` contains the administration interface.
 `src/shared` contains the microphone gate, keyboard/pointer controls, media-key
 encoding and shared design tokens. Generated `internal/server/web` files are
-committed so plain `go build` remains supported; do not edit generated files.
+ignored build output; do not edit or commit them. Run the frontend build before
+manual Go builds and tests, or use `../scripts/build.sh` from the repository root.
 
 Browser tests use real Chromium synthetic capture, with only LiveKit signalling
 mocked. They cover permission delays/denial, muted publication, keyboard input,
 window blur, cleanup, playback unlocking and mobile overflow. A live LiveKit
 server and a physical microphone are still required for hardware/network and
 native-device end-to-end acceptance.
-
-Use `../scripts/build.sh` from the repository for a complete local package.
