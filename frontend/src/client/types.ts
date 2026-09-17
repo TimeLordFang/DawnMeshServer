@@ -20,7 +20,7 @@ export interface ActiveRoom extends EnterRoom {
   isHost: boolean; canSpeak: boolean; muted: boolean; voiceMode: 'ptt' | 'auto'; ptt: boolean;
   audioProfile: string; speaking: Set<string>; messages: ChatMessage[];
   hostAdmissions: Map<string, { keys: PakeKeys; created: number }>; chatCipher: ChatCipher;
-  socket: EventChannel | null; room: Room | null; worker: Worker | null; leaving: boolean;
+  socket: EventChannel | null; room: Room | null; worker: Worker | null; leaving: boolean; roomEnded: boolean;
   eventsReconnectTimer: number | undefined; mediaReconnectTimer: number | undefined;
   mediaReconnectAttempts: number; mediaReconnectStarted: number; lastMediaError: string;
   microphonePermissionVerified: boolean; microphoneError: string; audioReady: boolean;
@@ -29,6 +29,8 @@ export interface ActiveRoom extends EnterRoom {
   mediaDiagnostic: string; fullReconnectTimer: number | undefined; fullReconnectStarted: number;
   inviteVisible: boolean; inviteTimer: number | undefined; intentionalMediaDisconnects?: WeakSet<Room>;
   micTrack?: LocalAudioTrack; micGate?: MicrophoneGate; micTask?: Promise<void>; audioGeneration: number; playbackBlocked: boolean;
+  pttReleaseTimer: number | undefined;
+  roomEndedTimer: number | undefined;
 }
 export interface ClientState {
   accessToken: string; nickname: string; deviceId: string; info: ServerInfo | null;

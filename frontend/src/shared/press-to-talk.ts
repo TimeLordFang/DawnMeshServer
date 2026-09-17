@@ -2,16 +2,16 @@
  * while microphone permission or track publication is still pending. */
 export function bindPressToTalk(button: HTMLButtonElement, options: {
   available: () => boolean;
-  change: (pressed: boolean) => void;
+  change: (pressed: boolean, immediate?: boolean) => void;
   unlock: () => void;
 }): () => void {
   let source: string | null = null;
   const controller = new AbortController();
   const listener = { signal: controller.signal };
-  const release = () => {
+  const release = (immediate = false) => {
     if (source === null) return;
     source = null;
-    options.change(false);
+    options.change(false, immediate);
   };
   const press = (next: string) => {
     if (source !== null || !options.available()) return;
@@ -26,7 +26,7 @@ export function bindPressToTalk(button: HTMLButtonElement, options: {
     press(`pointer:${event.pointerId}`);
   }, listener);
   const pointerRelease = (event: PointerEvent) => {
-    if (source === `pointer:${event.pointerId}`) release();
+    if (source === `pointer:${event.pointerId}`) release(event.type !== 'pointerup');
   };
   for (const name of ['pointerup', 'pointercancel', 'lostpointercapture'] as const) {
     button.addEventListener(name, pointerRelease, listener);
@@ -51,12 +51,12 @@ export function bindPressToTalk(button: HTMLButtonElement, options: {
     event.preventDefault();
     release();
   }, listener);
-  window.addEventListener('blur', release, listener);
+  window.addEventListener('blur', () => release(true), listener);
   document.addEventListener('focusin', event => {
     const target = event.target instanceof Element ? event.target : null;
-    if (target?.closest('input, textarea, select, [contenteditable]:not([contenteditable="false"])')) release();
+    if (target?.closest('input, textarea, select, [contenteditable]:not([contenteditable="false"])')) release(true);
   }, listener);
-  window.addEventListener('pagehide', release, listener);
-  document.addEventListener('visibilitychange', () => { if (document.hidden) release(); }, listener);
-  return () => { release(); controller.abort(); };
+  window.addEventListener('pagehide', () => release(true), listener);
+  document.addEventListener('visibilitychange', () => { if (document.hidden) release(true); }, listener);
+  return () => { release(true); controller.abort(); };
 }

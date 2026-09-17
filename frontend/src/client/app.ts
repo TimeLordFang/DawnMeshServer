@@ -468,6 +468,7 @@ async function enterRoom({ grant, roomKey, inviteCode, inviteScalar, chatCipher 
     room: null,
     worker: null,
     leaving: false,
+    roomEnded: false,
     eventsReconnectTimer: undefined,
     mediaReconnectTimer: undefined,
     mediaReconnectAttempts: 0,
@@ -489,6 +490,8 @@ async function enterRoom({ grant, roomKey, inviteCode, inviteScalar, chatCipher 
     fullReconnectStarted: 0,
     inviteVisible: false,
     inviteTimer: undefined,
+    pttReleaseTimer: undefined,
+    roomEndedTimer: undefined,
   };
   $("#audio-profile").value = state.active.audioProfile;
   show($("#room-view"));
@@ -559,7 +562,7 @@ async function handleManagementEvent(event: ManagementEvent) {
   } else if (event.type === "voice_policy") {
     if (event.memberId === active.memberId) {
       active.canSpeak = Boolean(event.canSpeak);
-      if (!active.canSpeak) active.ptt = false;
+      if (!active.canSpeak) stopPTT(active);
       await applyMicrophone(currentMicWanted());
     }
     active.members = event.members || active.members;
@@ -571,9 +574,7 @@ async function handleManagementEvent(event: ManagementEvent) {
     if (becameHost) revealInvite(); else hideInvite(true);
     renderRoom();
   } else if (event.type === "room_ended") {
-    toast("房间已解散");
-    await cleanupRoom();
-    await loadServer();
+    await handleRoomEnded(active);
   } else if (event.type === "error") {
     toast(event.error || "管理操作失败");
   } else if (event.type === "pake_hello" && active.isHost) {
@@ -692,7 +693,18 @@ async function applyAudioOutput(element: HTMLMediaElement | null = null) {
   }
 }
 
+function cancelPTTRelease(active: ActiveRoom) {
+  if (active.pttReleaseTimer !== undefined) window.clearTimeout(active.pttReleaseTimer);
+  active.pttReleaseTimer = undefined;
+}
+
+function stopPTT(active: ActiveRoom) {
+  cancelPTTRelease(active);
+  active.ptt = false;
+}
+
 function disposeMicrophone(active: ActiveRoom) {
+  cancelPTTRelease(active);
   active.audioGeneration += 1;
   active.micGate?.dispose();
   active.micTrack?.stop();
@@ -765,7 +777,7 @@ async function initializeAudioDevices(): Promise<void> {
       if (track) await room.localParticipant.unpublishTrack(track).catch(() => {});
       if (current()) {
         active.audioReady = false;
-        active.ptt = false;
+        stopPTT(active);
         active.microphoneError = errorText(cause);
       }
       throw cause;
@@ -841,7 +853,7 @@ async function connectMedia(grant: Grant) {
     if (state.active !== active || active.room !== room || active.leaving) return;
     if (participant?.identity !== active.memberId) return;
     active.canSpeak = room.localParticipant.permissions?.canPublish ?? active.canSpeak;
-    if (!active.canSpeak) active.ptt = false;
+    if (!active.canSpeak) stopPTT(active);
     await applyMicrophone(currentMicWanted());
     renderTalkState();
   });
@@ -877,7 +889,7 @@ async function connectMedia(grant: Grant) {
   });
   room.on(LivekitClient.RoomEvent.Reconnecting, () => {
     if (state.active !== active || active.room !== room) return;
-    active.ptt = false;
+    stopPTT(active);
     void active.micGate?.set(false);
     setRoomStatus("reconnecting", "媒体连接波动，正在恢复");
     renderTalkState();
@@ -886,7 +898,7 @@ async function connectMedia(grant: Grant) {
   room.on(LivekitClient.RoomEvent.Disconnected, (reason) => {
     if (active.intentionalMediaDisconnects?.has(room)) return;
     if (state.active === active && !active.leaving) {
-      active.ptt = false;
+      stopPTT(active);
       void active.micGate?.set(false);
       renderTalkState();
       console.warn("[DawnMesh client] LiveKit media disconnected", reason);
@@ -934,7 +946,7 @@ async function applyMicrophone(enabled: boolean) {
     if (state.active !== active) return;
     active.mediaDiagnostic = currentMicWanted() ? "麦克风正在发送" : "麦克风待机";
   } catch (cause) {
-    active.ptt = false;
+    stopPTT(active);
     active.micTrack && (active.micTrack.mediaStreamTrack.enabled = false);
     active.microphoneError = errorText(cause);
     toast(active.microphoneError);
@@ -1165,8 +1177,11 @@ function renderTalkState() {
   const enabled = currentMicWanted();
   button.classList.toggle("active", enabled);
   button.classList.toggle("disabled", !active.canSpeak);
-  button.disabled = !active.canSpeak;
-  if (active.audioInitializing) {
+  button.disabled = !active.canSpeak || active.roomEnded;
+  if (active.roomEnded) {
+    $("#talk-label").textContent = "房间已解散";
+    $("#talk-hint").textContent = "10 秒后返回房间列表";
+  } else if (active.audioInitializing) {
     $("#talk-label").textContent = "等待麦克风授权";
     $("#talk-hint").textContent = "请在浏览器提示中允许麦克风";
   } else if (active.microphoneError) {
@@ -1182,14 +1197,16 @@ function renderTalkState() {
     $("#talk-label").textContent = active.muted ? "自动通话已静音" : "自动通话中";
     $("#talk-hint").textContent = active.muted ? "点击下方取消静音" : "麦克风持续开启，点击静音暂停";
   } else {
-    $("#talk-label").textContent = active.ptt ? "正在说话" : "按住说话";
-    $("#talk-hint").textContent = active.muted ? "本机已静音" : "按住空格键或此按钮，松开停止";
+    const releasing = active.pttReleaseTimer !== undefined;
+    $("#talk-label").textContent = releasing ? "正在收尾" : active.ptt ? "正在说话" : "按住说话";
+    $("#talk-hint").textContent = releasing ? "正在发送尾音" : active.muted ? "本机已静音" : "按住空格键或此按钮，松开停止";
   }
   $("#mute-button").classList.toggle("active", active.muted);
   $("#mute-button").querySelector("small")!.textContent = active.muted ? "取消静音" : "静音";
   const notices = [];
   if (active.microphoneError) notices.push(active.microphoneError);
   if (active.summary.adminListening) notices.push("服务器管理员正在实时收听此房间");
+  if (active.roomEnded) notices.push("房间已被群主解散，10 秒后返回房间列表");
   $("#call-notice").textContent = notices.join(" · ");
 }
 
@@ -1226,9 +1243,15 @@ function renderRoom() {
   const active = state.active!;
   if (!active) return;
   $("#active-room-name").textContent = active.summary.name;
-  $("#rename-room").hidden = !active.isHost;
-  $("#end-room").hidden = !active.isHost;
-  for (const button of $("#voice-mode").querySelectorAll("button")) button.classList.toggle("active", button.dataset.mode === active.voiceMode);
+  $("#rename-room").hidden = !active.isHost || active.roomEnded;
+  $("#end-room").hidden = !active.isHost || active.roomEnded;
+  for (const button of $("#voice-mode").querySelectorAll("button")) {
+    button.classList.toggle("active", button.dataset.mode === active.voiceMode);
+    button.disabled = active.roomEnded;
+  }
+  $("#mute-button").disabled = active.roomEnded;
+  $("#chat-input").disabled = active.roomEnded;
+  $("#chat-form").querySelector<HTMLButtonElement>("button[type=submit]")!.disabled = active.roomEnded;
   renderInvite();
   renderMembers();
   renderTalkState();
@@ -1323,6 +1346,13 @@ async function cleanupRoom() {
   window.clearTimeout(active.eventsReconnectTimer);
   window.clearTimeout(active.mediaReconnectTimer);
   window.clearTimeout(active.fullReconnectTimer);
+  cancelPTTRelease(active);
+  window.clearTimeout(active.roomEndedTimer);
+  active.roomEndedTimer = undefined;
+  if (active.roomEnded) {
+    window.clearTimeout(state.toastTimer);
+    $("#toast").hidden = true;
+  }
   if (active.socket) { active.socket.intentional = true; active.socket.close(1000, "leaving"); }
   await active.room?.disconnect().catch(() => {});
   active.worker?.terminate();
@@ -1331,9 +1361,50 @@ async function cleanupRoom() {
   await releaseWakeLock();
 }
 
+async function handleRoomEnded(active: ActiveRoom) {
+  if (active.roomEnded || state.active !== active) return;
+  active.roomEnded = true;
+  active.leaving = true;
+  stopPTT(active);
+  disposeMicrophone(active);
+  active.audioInitializing = false;
+  active.micTask = undefined;
+  window.clearTimeout(active.eventsReconnectTimer);
+  window.clearTimeout(active.mediaReconnectTimer);
+  window.clearTimeout(active.fullReconnectTimer);
+  window.clearTimeout(active.inviteTimer);
+  if (active.socket) {
+    active.socket.intentional = true;
+    active.socket.close(1000, "room ended");
+    active.socket = null;
+  }
+  let roomToDisconnect: LivekitClient.Room | null = null;
+  if (active.room) {
+    active.intentionalMediaDisconnects ||= new WeakSet();
+    active.intentionalMediaDisconnects.add(active.room);
+    roomToDisconnect = active.room;
+    active.room = null;
+  }
+  active.worker?.terminate();
+  active.worker = null;
+  $("#remote-audio").replaceChildren();
+  setRoomStatus("failed", "房间已解散");
+  toast("房间已被群主解散，10 秒后返回房间列表", 10_000);
+  renderRoom();
+  void roomToDisconnect?.disconnect().catch(() => {});
+  active.roomEndedTimer = window.setTimeout(() => {
+    active.roomEndedTimer = undefined;
+    if (state.active !== active) return;
+    void cleanupRoom()
+      .then(() => loadServer())
+      .catch(cause => toast(errorText(cause)));
+  }, 10_000);
+}
+
 async function leaveRoom(endRoom = false) {
   const active = state.active!;
   if (!active) return;
+  if (active.roomEnded && endRoom) return;
   const question = endRoom ? "确定立即解散房间吗？所有成员都会断开。" : "确定离开当前房间吗？";
   if (!confirm(question)) return;
   try {
@@ -1418,9 +1489,9 @@ $("#enable-listening").addEventListener("click", async () => {
 });
 $("#voice-mode").addEventListener("click", async (event) => {
   const button = (event.target as HTMLElement).closest<HTMLButtonElement>("button[data-mode]");
-  if (!button || !state.active) return;
+  if (!button || !state.active || state.active.roomEnded) return;
   state.active.voiceMode = button.dataset.mode === "auto" ? "auto" : "ptt";
-  state.active.ptt = false;
+  stopPTT(state.active);
   if (state.active.voiceMode === "auto" && !state.active.audioReady) {
     try { await initializeAudioDevices(); } catch (_cause) { const cause = asError(_cause); toast(errorText(cause), 8000); }
   }
@@ -1453,8 +1524,8 @@ $("#audio-output-device").addEventListener("change", async (event) => {
 });
 $("#mute-button").addEventListener("click", async () => {
   if (!state.active) return;
+  stopPTT(state.active);
   state.active.muted = !state.active.muted;
-  if (state.active.muted) state.active.ptt = false;
   await applyMicrophone(currentMicWanted());
 });
 $("#audio-profile").addEventListener("change", async (event) => {
@@ -1465,15 +1536,27 @@ $("#audio-profile").addEventListener("change", async (event) => {
 });
 
 const talk = $("#talk-button");
-async function setPTT(pressed: boolean) {
+async function setPTT(pressed: boolean, immediate = false) {
   const active = state.active;
   if (!active) return;
   if (!pressed) {
-    active.ptt = false;
+    if (!immediate && active.ptt && active.audioReady && active.micTrack?.mediaStreamTrack.readyState === "live") {
+      cancelPTTRelease(active);
+      active.pttReleaseTimer = window.setTimeout(() => {
+        active.pttReleaseTimer = undefined;
+        if (state.active !== active) return;
+        active.ptt = false;
+        void applyMicrophone(currentMicWanted());
+      }, 500);
+      renderTalkState();
+      return;
+    }
+    stopPTT(active);
     await applyMicrophone(currentMicWanted());
     return;
   }
   if (active.voiceMode !== "ptt" || active.muted || !active.canSpeak) return;
+  cancelPTTRelease(active);
   active.ptt = true;
   renderTalkState();
   try {
@@ -1483,7 +1566,7 @@ async function setPTT(pressed: boolean) {
 }
 bindPressToTalk(talk, {
   available: () => Boolean(state.active && state.active.voiceMode === "ptt" && state.active.canSpeak && !state.active.muted && !$("#room-view").hidden),
-  change: pressed => { void setPTT(pressed); },
+  change: (pressed, immediate) => { void setPTT(pressed, immediate); },
   unlock: () => { void resumeRemoteAudio(true); },
 });
 
@@ -1514,7 +1597,7 @@ $("#rename-form").addEventListener("submit", async (event) => {
 
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState !== "visible") {
-    setPTT(false);
+    void setPTT(false, true);
     hideInvite();
   } else if (state.active) {
     acquireWakeLock();

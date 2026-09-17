@@ -17,6 +17,8 @@ test('space transmits only while held; text input and dialogs keep normal keyboa
     return repeat.defaultPrevented;
   })).toBe(true);
   await page.keyboard.up('Space');
+  await expect(page.locator('#talk-label')).toHaveText('正在收尾');
+  await expect.poll(() => page.evaluate(() => (window as any).__track.mediaStreamTrack.enabled)).toBe(true);
   await expect.poll(() => page.evaluate(() => (window as any).__track.mediaStreamTrack.enabled)).toBe(false);
   await page.locator('#chat-input').fill('同行');
   await page.keyboard.press('Space');
@@ -33,6 +35,36 @@ test('space transmits only while held; text input and dialogs keep normal keyboa
   await page.keyboard.up('Space');
   expect(errors).toEqual([]);
   await page.screenshot({ path: '/tmp/dawnmesh-room-desktop.png', fullPage: true });
+});
+
+test('pressing again during the 500ms tail window cancels the pending microphone mute', async ({ page }) => {
+  await enterRoom(page);
+  await page.locator('#enable-audio-devices').click();
+  await expect(page.locator('#audio-device-title')).toHaveText('麦克风已就绪');
+  await page.locator('#active-room-name').click();
+  await page.keyboard.down('Space');
+  await expect.poll(() => page.evaluate(() => (window as any).__track.mediaStreamTrack.enabled)).toBe(true);
+  await page.keyboard.up('Space');
+  await expect(page.locator('#talk-label')).toHaveText('正在收尾');
+  await page.keyboard.down('Space');
+  await expect(page.locator('#talk-label')).toHaveText('正在说话');
+  await page.waitForTimeout(550);
+  await expect.poll(() => page.evaluate(() => (window as any).__track.mediaStreamTrack.enabled)).toBe(true);
+  await page.keyboard.up('Space');
+  await expect.poll(() => page.evaluate(() => (window as any).__track.mediaStreamTrack.enabled)).toBe(false);
+});
+
+test('room dissolution notifies a member and returns to the lobby after ten seconds', async ({ page }) => {
+  const fixture = await enterRoom(page, { isHost: false });
+  fixture.sendManagementEvent({ type: 'room_ended' });
+  await expect(page.locator('#toast')).toHaveText('房间已被群主解散，10 秒后返回房间列表');
+  await expect(page.locator('#call-notice')).toContainText('房间已被群主解散');
+  await expect(page.locator('#talk-label')).toHaveText('房间已解散');
+  await page.waitForTimeout(9000);
+  await expect(page.locator('#room-view')).toBeVisible();
+  await expect(page.locator('#lobby-view')).toBeHidden();
+  await expect(page.locator('#lobby-view')).toBeVisible({ timeout: 3000 });
+  await expect(page.locator('#room-view')).toBeHidden();
 });
 
 test('first press released before permission resolves stays silent and leaving stops capture', async ({ page }) => {
@@ -116,6 +148,12 @@ test('pointer cancellation and permission revocation close the microphone immedi
   await talk.dispatchEvent('pointercancel', { pointerId: 1 });
   await expect.poll(() => page.evaluate(() => (window as any).__track.mediaStreamTrack.enabled)).toBe(false);
   await page.mouse.up();
+  await talk.hover();
+  await page.mouse.down();
+  await expect.poll(() => page.evaluate(() => (window as any).__track.mediaStreamTrack.enabled)).toBe(true);
+  await page.mouse.up();
+  await expect(page.locator('#talk-label')).toHaveText('正在收尾');
+  await expect.poll(() => page.evaluate(() => (window as any).__track.mediaStreamTrack.enabled)).toBe(false);
   await page.locator('#active-room-name').click();
   await page.keyboard.down('Space');
   await expect.poll(() => page.evaluate(() => (window as any).__track.mediaStreamTrack.enabled)).toBe(true);

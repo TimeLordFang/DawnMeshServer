@@ -1,8 +1,11 @@
 import type { Page } from '@playwright/test';
-export async function setupRoom(page: Page) {
+interface SetupRoomOptions { isHost?: boolean }
+export async function setupRoom(page: Page, options: SetupRoomOptions = {}) {
+  let sendEvent: ((event: unknown) => void) | undefined;
   await page.route('**/api/v1/**', async route => {
     const path = new URL(route.request().url()).pathname;
-    const summary = { id: 'room-one', name: '山海骑行小队', hostNickname: '林间', memberCount: 3, maxParticipants: 25, isHost: true, adminListening: false };
+    const isHost = options.isHost ?? true;
+    const summary = { id: 'room-one', name: '山海骑行小队', hostNickname: '林间', memberCount: 3, maxParticipants: 25, isHost, adminListening: false };
     const grant = { room: summary, memberId: 'me', resumeToken: 'test-session', eventsUrl: '/api/v1/events', livekitUrl: 'wss://test.invalid', livekitToken: 'test' };
     let result: unknown = {};
     if (path.endsWith('/info')) result = { protocolVersion: 1, instanceId: 'test', name: '曙光之声', maxRoomParticipants: 25, adminListeningSupported: true };
@@ -16,9 +19,10 @@ export async function setupRoom(page: Page) {
     await route.fulfill({ json: result });
   });
   await page.routeWebSocket('**/api/v1/events', ws => {
-    setTimeout(() => ws.send(JSON.stringify({ type: 'snapshot', hostMemberId: 'me', canSpeak: true, members: [
-      { id: 'me', nickname: '林间', canSpeak: true, isHost: true, connected: true },
-      { id: 'river', nickname: '小河', canSpeak: true, connected: true },
+    sendEvent = event => ws.send(JSON.stringify(event));
+    setTimeout(() => ws.send(JSON.stringify({ type: 'snapshot', hostMemberId: options.isHost === false ? 'river' : 'me', canSpeak: true, members: [
+      { id: 'me', nickname: '林间', canSpeak: true, isHost: options.isHost !== false, connected: true },
+      { id: 'river', nickname: '小河', canSpeak: true, isHost: options.isHost === false, connected: true },
       { id: 'mountain', nickname: '远山', canSpeak: true, connected: true },
     ] })), 30);
   });
@@ -58,9 +62,15 @@ export async function setupRoom(page: Page) {
       }
     `,
   }));
+  return {
+    sendManagementEvent(event: unknown) {
+      if (!sendEvent) throw new Error('management websocket is not connected');
+      sendEvent(event);
+    },
+  };
 }
-export async function enterRoom(page: Page) {
-  await setupRoom(page);
+export async function enterRoom(page: Page, options: SetupRoomOptions = {}) {
+  const fixture = await setupRoom(page, options);
   await page.goto('/ui/client/');
   await page.getByLabel('昵称', { exact: true }).fill('林间');
   await page.getByRole('button', { name: '连接服务器' }).click();
@@ -68,4 +78,5 @@ export async function enterRoom(page: Page) {
   await page.locator('#room-name-input').fill('山海骑行小队');
   await page.locator('#create-room-button').click();
   await page.locator('#room-connection-state.connected').waitFor();
+  return fixture;
 }

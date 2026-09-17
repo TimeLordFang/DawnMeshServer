@@ -118,6 +118,17 @@ install -m 0755 dawnmesh-server /usr/local/bin/dawnmesh-server
 
 进程需要读取与 `config.example.env` 对应的环境变量，并对 `DAWNMESH_DATABASE` 所在目录具有写权限。LiveKit 仍需单独运行。
 
+如果使用 shell 直接启动二进制，加载 `.env` 时要同时导出变量；单独执行 `source .env` 只会创建当前 shell 变量，Go 进程无法通过 `os.Getenv` 读取：
+
+```bash
+set -a
+source .env
+set +a
+./dawnmesh-server
+```
+
+示例配置已将带空格的实例名称写成 shell 可读取的带引号形式。Compose 使用 `env_file: .env`，不需要手动 `source`。
+
 ## TURN 与网络端口
 
 LiveKit 容器使用 host network，直接监听宿主机的 IPv4 与 IPv6 通配地址。实时语音优先使用 UDP 57882，ICE/TCP 57881 是回退链路；宿主机防火墙和云安全组必须同时为所需地址族放行。`use_external_ip: true` 会自动探测一个公网地址；需要同时公布固定公网 IPv4 和 IPv6 时，改为 `use_external_ip: false`，并设置 `node_ip: "公网IPv4,公网IPv6"`。

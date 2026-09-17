@@ -110,6 +110,17 @@ install -m 0755 dawnmesh-server /usr/local/bin/dawnmesh-server
 
 The process needs the environment variables described in `config.example.env` and write access to the parent directory of `DAWNMESH_DATABASE`. LiveKit remains a separate service.
 
+When starting the binary directly from a shell, export the variables while loading `.env`. A plain `source .env` creates shell variables but does not export them, so Go's `os.Getenv` sees empty values:
+
+```bash
+set -a
+source .env
+set +a
+./dawnmesh-server
+```
+
+Compose uses `env_file: .env` and does not require manually sourcing the file.
+
 ## TURN and network ports
 
 The LiveKit container uses host networking and listens on the host's IPv4 and IPv6 wildcard addresses. UDP 57882 is preferred for real-time voice, with ICE/TCP 57881 as fallback; allow both address families through the host firewall and cloud security group. `use_external_ip: true` discovers one public address. To advertise fixed public IPv4 and IPv6 addresses together, set `use_external_ip: false` and `node_ip: "public-IPv4,public-IPv6"`.
