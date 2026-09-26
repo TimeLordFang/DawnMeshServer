@@ -155,6 +155,41 @@ func TestEmptyRoomDeadlineTakesPrecedence(t *testing.T) {
 	_, stillPresent := server.rooms[room.ID]
 	server.mu.Unlock()
 	if stillPresent {
-		t.Fatal("empty room survived even though its 10-minute deadline expired")
+		t.Fatal("empty room survived even though its 30-minute deadline expired")
+	}
+}
+
+func TestDisconnectRetainsMembersAndEmptyRoomForThirtyMinutes(t *testing.T) {
+	server := testServer(t)
+	now := time.Now().UTC()
+	room := &Room{ID: "retention", Name: "Retention", HostMemberID: "host", HostNickname: "Host", MaxParticipants: 25, HostDisconnectTimeoutMinutes: 30, CreatedAt: now}
+	host := &Member{ID: "host", RoomID: room.ID, Nickname: "Host", IsHost: true, Connected: true, CanSpeak: true}
+	guest := &Member{ID: "guest", RoomID: room.ID, Nickname: "Guest", Connected: true, CanSpeak: true}
+	server.mu.Lock()
+	server.rooms[room.ID] = room
+	server.members[host.ID] = host
+	server.members[guest.ID] = guest
+	server.mu.Unlock()
+	server.livekit.rooms = nil
+	server.markConnected(guest.ID, false)
+	server.markConnected(host.ID, false)
+	for _, deadline := range []time.Time{guest.ReconnectDeadline, host.ReconnectDeadline, room.EmptyDeadline, room.HostReconnectDeadline} {
+		if delta := deadline.Sub(now); delta < 30*time.Minute || delta > 30*time.Minute+time.Second {
+			t.Fatalf("unexpected retention: %s", delta)
+		}
+	}
+	server.sweep(now.Add(29 * time.Minute))
+	server.mu.Lock()
+	alive := server.rooms[room.ID] != nil && server.members[guest.ID] != nil
+	server.mu.Unlock()
+	if !alive {
+		t.Fatal("room or member expired before thirty minutes")
+	}
+	server.sweep(now.Add(31 * time.Minute))
+	server.mu.Lock()
+	remaining := server.rooms[room.ID] != nil
+	server.mu.Unlock()
+	if remaining {
+		t.Fatal("empty room did not expire after thirty minutes")
 	}
 }

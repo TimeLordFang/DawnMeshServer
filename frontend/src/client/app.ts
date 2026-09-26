@@ -283,10 +283,10 @@ async function openEventChannel(url: string, sessionToken: string, onMessage: Ev
 }
 
 function randomInvite() {
-  const limit = Math.floor(0x100000000 / 1000000) * 1000000;
+  const limit = Math.floor(0x100000000 / 10000) * 10000;
   const value = new Uint32Array(1);
   do crypto.getRandomValues(value); while (value[0] >= limit);
-  return String(value[0] % 1000000).padStart(6, "0");
+  return String(value[0] % 10000).padStart(4, "0");
 }
 
 function pakeIdentities(roomId: string, admissionId: string, memberId: string) {
@@ -372,7 +372,7 @@ async function createRoom() {
   error.textContent = "";
   setBusy(button, true, "正在生成密钥…");
   try {
-    const inviteCode = randomInvite();
+    const inviteCode = $("#create-invite-input").value.trim();
     const roomKey = crypto.getRandomValues(new Uint8Array(32));
     const inviteScalar = await operation("邀请码密钥派生", () => DawnCrypto.deriveInviteScalar(inviteCode));
     const chatCipher = await operation("聊天密钥初始化", () => DawnCrypto.ChatCipher.create(roomKey));
@@ -989,7 +989,7 @@ function scheduleFullReconnect(statusLabel = "连接中断，正在自动恢复"
   window.clearTimeout(active.mediaReconnectTimer);
   active.mediaReconnectTimer = undefined;
   if (!active.fullReconnectStarted) active.fullReconnectStarted = Date.now();
-  if (Date.now() - active.fullReconnectStarted > 10 * 60 * 1000) {
+  if (Date.now() - active.fullReconnectStarted > 30 * 60 * 1000) {
     setRoomStatus("failed", "恢复窗口已结束，请重新加入");
     return;
   }
@@ -1032,7 +1032,7 @@ function scheduleMediaReconnect(statusLabel = "媒体连接中断，正在自动
   setRoomStatus("reconnecting", statusLabel);
   if (active.mediaReconnectTimer) return;
   if (!active.mediaReconnectStarted) active.mediaReconnectStarted = Date.now();
-  if (Date.now() - active.mediaReconnectStarted > 10 * 60 * 1000) {
+  if (Date.now() - active.mediaReconnectStarted > 30 * 60 * 1000) {
     setRoomStatus("failed", "媒体恢复窗口已结束，请重新加入");
     return;
   }
@@ -1457,8 +1457,10 @@ $("#change-server").addEventListener("click", () => show($("#setup-view")));
 $("#open-create-room").addEventListener("click", () => {
   $("#create-error").textContent = "";
   $("#room-name-input").value = `${state.nickname}的房间`;
+  $("#create-invite-input").value = randomInvite();
   $("#create-dialog").showModal();
 });
+$("#regenerate-invite").addEventListener("click", () => { $("#create-invite-input").value = randomInvite(); });
 $("#create-form").addEventListener("submit", (event) => {
   event.preventDefault();
   if ((event.submitter as HTMLButtonElement | null)?.value === "cancel") { $("#create-dialog").close(); return; }

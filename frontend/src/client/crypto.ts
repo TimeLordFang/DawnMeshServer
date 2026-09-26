@@ -329,7 +329,7 @@ export interface PakeKeys { transcript: Bytes; sharedKey: Bytes; confirmA: Bytes
   }
 
   async function deriveInviteScalar(code: string) {
-    if (!/^\d{6}$/.test(code)) throw new Error("请输入 6 位数字邀请码");
+    if (!/^(?:\d{4}|\d{6})$/.test(code)) throw new Error("请输入 4 位数字邀请码（兼容旧版 6 位）");
     const bytes = await scrypt(utf8.encode(code), utf8.encode("DawnMesh SPAKE2 PIN v2"));
     return bigintFromBytes(bytes);
   }

@@ -47,3 +47,13 @@ if (toHex(chatPacket) !== "000102030405060708090a0bf3607290423845140aa7a23b191e5
 }
 
 console.log("DawnMesh browser cryptography vectors passed");
+
+const fourDigits = await deriveInviteScalar("0012");
+if (fourDigits !== await deriveInviteScalar("0012")) throw new Error("4-digit derivation is unstable");
+if (fourDigits === await deriveInviteScalar("000012")) throw new Error("legacy PIN was padded or truncated");
+for (const invalid of ["123", "12345", "1234567", "12a4"]) {
+  let rejected = false;
+  try { await deriveInviteScalar(invalid); } catch { rejected = true; }
+  if (!rejected) throw new Error(`invalid invite accepted: ${invalid}`);
+}
+console.log("Four-digit and legacy six-digit invitations passed");

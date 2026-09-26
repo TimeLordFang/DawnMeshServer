@@ -24,6 +24,8 @@ import (
 	"github.com/coder/websocket/wsjson"
 )
 
+const reconnectRetention = 30 * time.Minute
+
 type Server struct {
 	cfg          config.Config
 	startedAt    time.Time
@@ -55,7 +57,7 @@ func New(cfg config.Config) (*Server, error) {
 	now := time.Now().UTC()
 	for _, room := range rooms {
 		if room.EmptyDeadline.IsZero() {
-			room.EmptyDeadline = now.Add(10 * time.Minute)
+			room.EmptyDeadline = now.Add(reconnectRetention)
 		}
 		if host := members[room.HostMemberID]; host != nil && room.HostReconnectDeadline.IsZero() {
 			room.HostReconnectDeadline = now.Add(time.Duration(room.HostDisconnectTimeoutMinutes) * time.Minute)
@@ -65,7 +67,7 @@ func New(cfg config.Config) (*Server, error) {
 	for _, member := range members {
 		member.Connected = false
 		if member.ReconnectDeadline.IsZero() {
-			member.ReconnectDeadline = now.Add(10 * time.Minute)
+			member.ReconnectDeadline = now.Add(reconnectRetention)
 		}
 		_ = db.saveMember(context.Background(), member)
 	}
@@ -715,7 +717,7 @@ func (s *Server) routeEvent(ctx context.Context, member *Member, admission *Admi
 				joinOrder = item.JoinOrder + 1
 			}
 		}
-		joined := &Member{ID: pending.MemberID, RoomID: room.ID, Nickname: pending.Nickname, DeviceID: pending.DeviceID, ResumeTokenHash: pending.ResumeTokenHash, CanSpeak: true, JoinOrder: joinOrder, Connected: false, ReconnectDeadline: time.Now().UTC().Add(10 * time.Minute)}
+		joined := &Member{ID: pending.MemberID, RoomID: room.ID, Nickname: pending.Nickname, DeviceID: pending.DeviceID, ResumeTokenHash: pending.ResumeTokenHash, CanSpeak: true, JoinOrder: joinOrder, Connected: false, ReconnectDeadline: time.Now().UTC().Add(reconnectRetention)}
 		s.members[joined.ID] = joined
 		delete(s.admissions, pending.ID)
 		_ = s.store.saveMember(ctx, joined)
@@ -820,12 +822,12 @@ func (s *Server) markConnected(id string, connected bool) {
 		}
 		room.EmptyDeadline = time.Time{}
 	} else {
-		member.ReconnectDeadline = now.Add(10 * time.Minute)
+		member.ReconnectDeadline = now.Add(reconnectRetention)
 		if member.IsHost && room.HostReconnectDeadline.IsZero() {
 			room.HostReconnectDeadline = now.Add(time.Duration(room.HostDisconnectTimeoutMinutes) * time.Minute)
 		}
 		if !s.anyOnline(room.ID) {
-			room.EmptyDeadline = now.Add(10 * time.Minute)
+			room.EmptyDeadline = now.Add(reconnectRetention)
 		}
 	}
 	_ = s.store.saveMember(context.Background(), member)

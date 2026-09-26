@@ -131,10 +131,10 @@ When Nginx and LiveKit run on the same host, they cannot both bind TCP 57881 and
 
 ## Recovery behavior
 
-- An ordinary member retains their identity for 10 minutes after an unexpected disconnect.
-- A host chooses a 1–60 minute deadline when creating the room; the default is 10 minutes.
+- An ordinary member retains their identity for 30 minutes after an unexpected disconnect.
+- A host chooses a 1–60 minute deadline when creating the room; the default is 30 minutes.
 - If the host deadline expires while members remain online, ownership moves to the earliest online member.
-- An entirely empty room is removed 10 minutes after the final disconnect, even when the host selected a longer deadline.
+- An entirely empty room is removed 30 minutes after the final disconnect, even when the host selected a longer deadline.
 - Explicit host termination removes the room immediately.
 
 SQLite data lives in the `dawnmesh-data` volume. Back up the database together with `.env` and `livekit.yaml`. Invite codes and chat content are not written to SQLite. The server stores an E2EE room key wrapped by the administrator credential only when the host explicitly enables administrator listening.

@@ -91,9 +91,13 @@ jobs:
           if gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
             gh release upload "${GITHUB_REF_NAME}" dist/*.tar.gz dist/SHA256SUMS --clobber
           else
+            notes_file="docs/RELEASE_${GITHUB_REF_NAME#v}.md"
+            notes_flags=(--generate-notes)
+            if [[ -f "${notes_file}" ]]; then
+              notes_flags=(--notes-file "${notes_file}")
+            fi
             gh release create "${GITHUB_REF_NAME}" dist/*.tar.gz dist/SHA256SUMS \
-              --verify-tag \
-              --generate-notes \
+              --verify-tag "${notes_flags[@]}" \
               --title "DawnMesh Server ${GITHUB_REF_NAME}"
           fi
 
