@@ -37,6 +37,10 @@ CREATE TABLE IF NOT EXISTS members (
  reconnect_deadline INTEGER
 );
 CREATE INDEX IF NOT EXISTS members_room_order ON members(room_id, join_order);
+CREATE TABLE IF NOT EXISTS room_presence_settings (
+ room_id TEXT PRIMARY KEY REFERENCES rooms(id) ON DELETE CASCADE,
+ announcements_enabled INTEGER NOT NULL DEFAULT 0
+);
 CREATE TABLE IF NOT EXISTS room_monitor_keys (
  room_id TEXT PRIMARY KEY REFERENCES rooms(id) ON DELETE CASCADE,
  wrapped_key BLOB NOT NULL
@@ -65,6 +69,12 @@ max_participants=excluded.max_participants,host_timeout_minutes=excluded.host_ti
 host_reconnect_deadline=excluded.host_reconnect_deadline,empty_deadline=excluded.empty_deadline`,
 		room.ID, room.Name, room.HostMemberID, room.HostNickname, room.MaxParticipants,
 		room.HostDisconnectTimeoutMinutes, room.CreatedAt.UnixMilli(), millis(room.HostReconnectDeadline), millis(room.EmptyDeadline))
+	return err
+}
+
+func (s *store) savePresenceAnnouncements(ctx context.Context, roomID string, enabled bool) error {
+	_, err := s.db.ExecContext(ctx, `INSERT INTO room_presence_settings(room_id,announcements_enabled) VALUES(?,?)
+ON CONFLICT(room_id) DO UPDATE SET announcements_enabled=excluded.announcements_enabled`, roomID, enabled)
 	return err
 }
 
@@ -103,6 +113,28 @@ func (s *store) load(ctx context.Context) (map[string]*Room, map[string]*Member,
 		rooms[room.ID] = room
 	}
 	if err := rows.Close(); err != nil {
+		return nil, nil, err
+	}
+	presenceRows, err := s.db.QueryContext(ctx, `SELECT room_id,announcements_enabled FROM room_presence_settings`)
+	if err != nil {
+		return nil, nil, err
+	}
+	for presenceRows.Next() {
+		var id string
+		var enabled bool
+		if err := presenceRows.Scan(&id, &enabled); err != nil {
+			presenceRows.Close()
+			return nil, nil, err
+		}
+		if room := rooms[id]; room != nil {
+			room.PresenceAnnouncementsEnabled = enabled
+		}
+	}
+	if err := presenceRows.Err(); err != nil {
+		presenceRows.Close()
+		return nil, nil, err
+	}
+	if err := presenceRows.Close(); err != nil {
 		return nil, nil, err
 	}
 	keyRows, err := s.db.QueryContext(ctx, `SELECT room_id,wrapped_key FROM room_monitor_keys`)

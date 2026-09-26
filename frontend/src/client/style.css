@@ -102,3 +102,11 @@
 .pin-input { font-size: 28px; letter-spacing: .25em; text-align: center; }
 @media (max-width: 900px) { .app-shell { padding: 0 24px 28px; } .center-view { gap: 6%; } .setup-card { padding: 28px; } .room-layout { grid-template-columns: 1fr; } .chat-panel { min-height: 360px; max-height: 500px; } .room-list { grid-template-columns: repeat(2, 1fr); } }
 @media (max-width: 600px) { .app-shell { padding: 0 16px 24px; } .center-view { display: block; padding: 24px 0; } .welcome-panel { padding: 0 8px 24px; } .welcome-brand { font-size: 13px; } .welcome-panel h2 { font-size: 30px; margin: 22px 0 0; } .welcome-panel h2 br { display: none; } .welcome-panel p, .welcome-footer, .signal-art { display: none; } .setup-card { padding: 26px; } .setup-card .brand-mark { display: none; } .lobby-hero { align-items: flex-start; flex-direction: column; padding: 32px 0; } .lobby-hero h2 { font-size: 27px; } .room-list { grid-template-columns: 1fr; } .room-layout { gap: 20px; margin-top: 20px; } .members-panel, .chat-panel { padding: 18px; } .member-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } .room-topbar { gap: 10px; } .room-topbar h1 { font-size: 19px; } .invite-card { padding: 14px 18px; } .invite-card > div { gap: 14px; } .call-controls { gap: 12px; } .audio-device-controls { grid-template-columns: 1fr; gap: 0; } .audio-setup-summary { flex-wrap: wrap; } .dialog-card { padding: 22px; } }
+
+.invite-input-row { position: relative; }
+.invite-input-row input { padding-right: 52px; width: 100%; }
+.invite-input-row .icon-button { position: absolute; right: 4px; top: 4px; width: 40px; height: 40px; font-size: 24px; }
+.avatar .offline-badge { position: absolute; bottom: -3px; left: 50%; transform: translateX(-50%); padding: 1px 6px; border-radius: 7px; background: #59636d; color: white; font-size: 10px; white-space: nowrap; }
+.member-card.offline .avatar { filter: grayscale(1); }
+.member-card.offline .mic-state { display: none; }
+.room-topbar .title-line { flex-wrap: wrap; }

@@ -72,6 +72,7 @@
             <div class="title-line">
               <h1 id="active-room-name">房间</h1>
               <button id="rename-room" class="mini-button" type="button" hidden>改名</button>
+              <button id="presence-announcements" class="mini-button" type="button" hidden>成员语音提示：关</button>
             </div>
             <p id="room-connection-state" class="room-status"><span></span>正在连接</p>
           </div>
@@ -176,10 +177,14 @@
           <label>房主断线保留<input id="host-timeout-input" type="number" min="1" max="60" value="30" required><small>分钟，最多 60</small></label>
         </div>
         <label id="monitoring-option" class="check-row" hidden><input id="allow-monitoring" type="checkbox"><span><strong>允许管理员实时收听</strong><small>房间内会持续显示收听状态</small></span></label>
-        <p class="dialog-note">创建后会生成六位数字邀请码。邀请码不会发送或保存在服务器。</p>
+        <p class="dialog-note">默认生成四位数字邀请码，兼容手动设置六位。邀请码不会发送或保存在服务器。</p>
         <p id="create-error" class="form-error" role="alert"></p>
-        <label>房间邀请码<input id="create-invite-input" inputmode="numeric" pattern="([0-9]{4}|[0-9]{6})" maxlength="6" required><small>默认随机 4 位，可手动修改；有旧版成员时请设为 6 位。</small></label>
-        <button id="regenerate-invite" type="button" class="ghost-button">随机生成</button>
+        <label for="create-invite-input">房间邀请码</label>
+        <div class="invite-input-row">
+          <input id="create-invite-input" inputmode="numeric" pattern="([0-9]{4}|[0-9]{6})" maxlength="6" required aria-describedby="invite-help">
+          <button id="regenerate-invite" type="button" class="icon-button" title="随机生成" aria-label="随机生成">↻</button>
+        </div>
+        <small id="invite-help">默认随机 4 位，可手动修改；有旧版成员时请设为 6 位。</small>
         <div class="dialog-actions"><button class="ghost-button" value="cancel" formnovalidate>取消</button><button id="create-room-button" class="primary-button" value="default">创建房间</button></div>
       </form>
     </dialog>

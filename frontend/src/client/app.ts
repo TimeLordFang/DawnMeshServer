@@ -1,3 +1,4 @@
+import { resetPresence, observePresence, memberLeft } from './presence';
 import * as DawnCrypto from './crypto';
 import { bindPressToTalk } from '../shared/press-to-talk';
 import { MicrophoneGate } from '../shared/microphone-gate';
@@ -521,6 +522,7 @@ async function connectEvents() {
     active.socket.intentional = true;
     active.socket.close(1000, "replaced");
   }
+  resetPresence(active);
   const socket = await openEventChannel(active.grant.eventsUrl, active.resumeToken, (message) => {
     handleManagementEvent(JSON.parse((message as MessageEvent<string>).data)).catch((cause) => toast(errorText(cause)));
   });
@@ -532,6 +534,7 @@ async function connectEvents() {
   active.socket = socket;
   socket.addEventListener("close", () => {
     if (state.active !== active || active.leaving || socket.intentional) return;
+    resetPresence(active);
     setRoomStatus("reconnecting", "管理通道中断，正在恢复");
     window.clearTimeout(active.eventsReconnectTimer);
     active.eventsReconnectTimer = window.setTimeout(() => connectEvents().catch(() => scheduleFullReconnect()), 2000);
@@ -552,13 +555,17 @@ async function handleManagementEvent(event: ManagementEvent) {
     active.isHost = event.hostMemberId === active.memberId;
     active.canSpeak = event.canSpeak ?? active.canSpeak;
     active.members = event.members || active.members;
+    observePresence(active, active.members);
     if (becameHost) revealInvite();
     if (!active.isHost) hideInvite(true);
     await applyMicrophone(currentMicWanted());
     renderRoom();
   } else if (event.type === "room_updated") {
     active.summary = event.room;
+    observePresence(active, active.members);
     renderRoom();
+  } else if (event.type === "member_left") {
+    memberLeft(active, event.memberId, event.nickname || '成员', event.eventId || '');
   } else if (event.type === "voice_policy") {
     if (event.memberId === active.memberId) {
       active.canSpeak = Boolean(event.canSpeak);
@@ -1123,12 +1130,19 @@ function renderMembers() {
     mic.textContent = member.canSpeak ? "•" : "×";
     mic.title = member.canSpeak ? "可以发言" : "已被房主封麦";
     avatar.append(mic);
+    if (member.connected === false) {
+      const offline = document.createElement("span");
+      offline.className = "offline-badge";
+      offline.textContent = "离线";
+      avatar.append(offline);
+      card.classList.add("offline");
+    }
     const name = document.createElement("p");
     name.className = "member-name";
     name.textContent = member.id === active.memberId ? `${member.nickname}（我）` : member.nickname;
     const role = document.createElement("p");
     role.className = `member-role${member.isHost ? " host" : ""}`;
-    role.textContent = member.isHost ? "房主" : member.connected === false ? "暂时离线" : active.speaking.has(member.id) ? "正在说话" : "在线";
+    role.textContent = member.connected === false ? (member.isHost ? "房主 · 离线" : "暂时离线") : member.isHost ? "房主" : active.speaking.has(member.id) ? "正在说话" : "在线";
     card.append(avatar, name, role);
     if (active.isHost && !member.isHost && member.id !== active.memberId) {
       const actions = document.createElement("div");
@@ -1244,6 +1258,12 @@ function renderRoom() {
   if (!active) return;
   $("#active-room-name").textContent = active.summary.name;
   $("#rename-room").hidden = !active.isHost || active.roomEnded;
+  const presenceButton = $("#presence-announcements");
+  presenceButton.hidden = !active.isHost || active.roomEnded;
+  presenceButton.disabled = !active.summary.presenceAnnouncementsSupported;
+  presenceButton.textContent = `成员语音提示：${active.summary.presenceAnnouncementsEnabled ? '开' : '关'}`;
+  presenceButton.setAttribute('aria-pressed', String(!!active.summary.presenceAnnouncementsEnabled));
+  presenceButton.title = '房主统一设置；语音提示需要浏览器已安装本地中文语音';
   $("#end-room").hidden = !active.isHost || active.roomEnded;
   for (const button of $("#voice-mode").querySelectorAll("button")) {
     button.classList.toggle("active", button.dataset.mode === active.voiceMode);
@@ -1341,6 +1361,7 @@ async function cleanupRoom() {
   const active = state.active!;
   if (!active) return;
   active.leaving = true;
+  resetPresence(active);
   disposeMicrophone(active);
   window.clearTimeout(active.inviteTimer);
   window.clearTimeout(active.eventsReconnectTimer);
@@ -1363,6 +1384,7 @@ async function cleanupRoom() {
 
 async function handleRoomEnded(active: ActiveRoom) {
   if (active.roomEnded || state.active !== active) return;
+  resetPresence(active);
   active.roomEnded = true;
   active.leaving = true;
   stopPTT(active);
@@ -1627,3 +1649,17 @@ if (!window.isSecureContext) {
     .catch((cause) => { $("#setup-error").textContent = errorText(cause); })
     .finally(() => setBusy(button, false));
 }
+
+$("#presence-announcements").addEventListener("click", async () => {
+  const active = state.active;
+  if (!active?.isHost || !active.summary.presenceAnnouncementsSupported) return;
+  const button = $("#presence-announcements"); button.disabled = true;
+  try {
+    const response = await api<{room: RoomSummary}>(`/api/v1/rooms/${active.grant.room.id}/presence-announcements`, {
+      method: 'PUT', sessionToken: active.resumeToken,
+      body: JSON.stringify({enabled: !active.summary.presenceAnnouncementsEnabled}),
+    });
+    if (state.active === active) { active.summary = response.room; observePresence(active, active.members); renderRoom(); }
+  } catch (error) { toast(errorText(error)); }
+  finally { if (state.active === active) button.disabled = false; }
+});

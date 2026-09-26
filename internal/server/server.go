@@ -102,6 +102,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("PUT /api/v1/rooms/{room}/members/{member}/voice-policy", s.withSession(s.voicePolicy))
 	mux.HandleFunc("POST /api/v1/rooms/{room}/handover", s.withSession(s.handover))
 	mux.HandleFunc("DELETE /api/v1/rooms/{room}/members/{member}", s.withSession(s.leaveMember))
+	mux.HandleFunc("PUT /api/v1/rooms/{room}/presence-announcements", s.withSession(s.setPresenceAnnouncements))
 	mux.HandleFunc("DELETE /api/v1/rooms/{room}", s.withSession(s.endRoom))
 	mux.HandleFunc("GET /api/v1/events", s.withEventAccess(s.events))
 	mux.HandleFunc("GET /api/v1/events/stream", s.withAccess(s.eventHTTPStream))
@@ -420,6 +421,38 @@ func (s *Server) mediaGrant(w http.ResponseWriter, r *http.Request, caller *Memb
 	})
 }
 
+func (s *Server) setPresenceAnnouncements(w http.ResponseWriter, r *http.Request, caller *Member) {
+	var body struct {
+		Enabled *bool `json:"enabled"`
+	}
+	if !decodeJSON(w, r, &body) {
+		return
+	}
+	if body.Enabled == nil {
+		writeError(w, http.StatusBadRequest, "缺少语音提示开关")
+		return
+	}
+	s.mu.Lock()
+	room := s.rooms[r.PathValue("room")]
+	// Check the current host while holding the lock, including handover races.
+	if room == nil || caller.RoomID != room.ID || room.HostMemberID != caller.ID {
+		s.mu.Unlock()
+		writeError(w, http.StatusForbidden, "只有当前房主可以修改语音提示")
+		return
+	}
+	if err := s.store.savePresenceAnnouncements(r.Context(), room.ID, *body.Enabled); err != nil {
+		s.mu.Unlock()
+		writeError(w, http.StatusInternalServerError, "无法保存语音提示设置")
+		return
+	}
+	room.PresenceAnnouncementsEnabled = *body.Enabled
+	payload := map[string]any{"type": "room_updated", "room": s.roomJSON(room)}
+	roomID := room.ID
+	s.mu.Unlock()
+	s.broadcastRoom(roomID, payload)
+	writeJSON(w, http.StatusOK, payload)
+}
+
 func (s *Server) renameRoom(w http.ResponseWriter, r *http.Request, caller *Member) {
 	if caller.RoomID != r.PathValue("room") || !caller.IsHost {
 		writeError(w, http.StatusForbidden, "只有房主可以改名")
@@ -529,6 +562,7 @@ func (s *Server) leaveMember(w http.ResponseWriter, r *http.Request, caller *Mem
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 		return
 	}
+	s.broadcastRoom(caller.RoomID, map[string]any{"type": "member_left", "eventId": randomID(12), "memberId": caller.ID, "nickname": caller.Nickname})
 	s.broadcastSnapshot(caller.RoomID)
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
@@ -747,7 +781,7 @@ func (s *Server) connectionGrant(room *Room, member *Member, resume string) (map
 }
 
 func (s *Server) roomJSON(room *Room) map[string]any {
-	return map[string]any{"id": room.ID, "name": room.Name, "memberCount": s.memberCount(room.ID), "maxParticipants": room.MaxParticipants, "hostNickname": room.HostNickname, "hostDisconnectTimeoutMinutes": room.HostDisconnectTimeoutMinutes, "adminListeningAvailable": len(room.MonitoringKey) > 0, "adminListening": s.monitorCountLocked(room.ID) > 0}
+	return map[string]any{"id": room.ID, "name": room.Name, "memberCount": s.memberCount(room.ID), "maxParticipants": room.MaxParticipants, "hostNickname": room.HostNickname, "hostDisconnectTimeoutMinutes": room.HostDisconnectTimeoutMinutes, "presenceAnnouncementsSupported": true, "presenceAnnouncementsEnabled": room.PresenceAnnouncementsEnabled, "adminListeningAvailable": len(room.MonitoringKey) > 0, "adminListening": s.monitorCountLocked(room.ID) > 0}
 }
 func (s *Server) memberCount(roomID string) int {
 	count := 0

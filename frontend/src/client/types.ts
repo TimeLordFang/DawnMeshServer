@@ -1,13 +1,13 @@
 import type { Room, LocalAudioTrack } from 'livekit-client';
 import type { Bytes, ChatCipher, PakeKeys } from './crypto';
 import type { MicrophoneGate } from '../shared/microphone-gate';
-export interface RoomSummary { id: string; name: string; hostNickname: string; memberCount: number; maxParticipants: number; isHost: boolean; adminListening: boolean }
+export interface RoomSummary { presenceAnnouncementsSupported?: boolean; presenceAnnouncementsEnabled?: boolean; id: string; name: string; hostNickname: string; memberCount: number; maxParticipants: number; isHost: boolean; adminListening: boolean }
 export interface Member { id: string; nickname: string; canSpeak: boolean; isHost: boolean; connected: boolean; reconnectDeadline?: string }
 export interface Grant { memberId: string; resumeToken: string; eventsUrl: string; livekitUrl: string; livekitToken: string; room: RoomSummary }
 export interface Admission { admissionId: string; memberId: string; resumeToken: string; eventsUrl: string }
 export interface EnterRoom { grant: Grant; roomKey: Bytes; inviteCode: string; inviteScalar: bigint; chatCipher?: ChatCipher | null }
 export interface ServerInfo { protocolVersion: number; instanceId: string; name: string; maxRoomParticipants: number; adminListeningSupported: boolean }
-export interface ManagementEvent { type: string; room: RoomSummary; hostMemberId: string; memberId: string; canSpeak: boolean; members: Member[]; body: string; admissionId: string; connection: Grant; error: string }
+export interface ManagementEvent { eventId?: string; nickname?: string; type: string; room: RoomSummary; hostMemberId: string; memberId: string; canSpeak: boolean; members: Member[]; body: string; admissionId: string; connection: Grant; error: string }
 export interface EventChannel {
   readyState: number; intentional?: boolean; transport?: string;
   addEventListener(type: string, callback: EventListener, options?: AddEventListenerOptions): void;

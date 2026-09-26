@@ -1,5 +1,6 @@
 import { element } from '../shared/dom';
 interface Elements {
+  "#presence-announcements": HTMLButtonElement;
   "#create-invite-input": HTMLInputElement;
   "#regenerate-invite": HTMLButtonElement;
   "#remote-audio": HTMLElement;

@@ -3,6 +3,7 @@ package server
 import "time"
 
 type Room struct {
+	PresenceAnnouncementsEnabled bool      `json:"presenceAnnouncementsEnabled"`
 	ID                           string    `json:"id"`
 	Name                         string    `json:"name"`
 	HostMemberID                 string    `json:"-"`
