@@ -6,14 +6,14 @@
 [![Release](https://github.com/TimeLordFang/DawnMeshServer/actions/workflows/release.yml/badge.svg)](https://github.com/TimeLordFang/DawnMeshServer/actions/workflows/release.yml)
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](LICENSE)
 
-DawnMesh Server is the self-hosted control plane for DawnMesh public intercom rooms. It stores room metadata in SQLite, relays the client-to-client SPAKE2 admission exchange, enforces host moderation, and issues short-lived, least-privilege LiveKit tokens. Voice and chat use client-held LiveKit E2EE keys by default. A host can explicitly allow the self-hosted server administrator to listen when creating a room.
+DawnMesh Server is the self-hosted control plane for DawnMesh public intercom rooms. It stores room metadata in SQLite, verifies client admission credentials directly, enforces host moderation, and issues short-lived, least-privilege LiveKit tokens. Voice and chat use client-held LiveKit E2EE keys by default. A host can explicitly allow the self-hosted server administrator to listen when creating a room.
 
 The project does not request or renew HTTPS certificates. Put the API and LiveKit signalling behind an existing Nginx TLS endpoint.
 
 ## Features
 
 - 25 participants per room by default, configurable through `DAWNMESH_MAX_PARTICIPANTS`
-- Six-digit invitations verified with SPAKE2 and excluded from HTTP requests, metadata, JWTs, and server logs
+- Four-digit invitations derive separate admission and key-wrapping secrets; the server admits members even while the host is offline
 - Host controls for room names, participant microphones, and explicit room termination
 - Configurable 1–60 minute host disconnect deadline
 - Automatic host transfer and cleanup of empty rooms
@@ -73,9 +73,9 @@ Add `DAWNMESH_PUBLIC_URL` in the Android app's network intercom settings and use
 
 After deployment, open `https://talk.example.com/client/`. The web client uses the server that served the page. Enter `DAWNMESH_ACCESS_TOKEN` on the initial screen when the deployment requires it.
 
-The browser and Android public-room clients share the same protocol and rooms. The web client can create and discover rooms, join with a six-digit invite, use push-to-talk or automatic voice, switch among clarity/balanced/data-saver profiles, exchange encrypted text messages, and show speaking state with stable member avatars. Listening and microphone capture are enabled separately, so a computer without an input device can still receive room audio. Hosts can rename or end the room, control another member's microphone permission, and transfer ownership. The management channel prefers WebSocket and automatically falls back to an authenticated HTTPS stream when a proxy rejects the upgrade. Media recovery independently refreshes its short-lived grant within the existing ten-minute member retention window.
+The browser and Android public-room clients share the same protocol and rooms. The web client can create and discover rooms, join with a four-digit invite, use push-to-talk or automatic voice, switch among clarity/balanced/data-saver profiles, exchange encrypted text messages, and show speaking state with stable member avatars. Listening and microphone capture are enabled separately, so a computer without an input device can still receive room audio. Hosts can rename or end the room, control another member's microphone permission, and transfer ownership. The management channel prefers WebSocket and automatically falls back to an authenticated HTTPS stream when a proxy rejects the upgrade. Media recovery independently refreshes its short-lived grant within the existing thirty-minute member retention window.
 
-Invite authentication uses the same scrypt and P-256 SPAKE2 transcript as Android, and the invite never reaches the server. LiveKit media uses the same E2EE room key; chat uses a purpose-separated AES-256-GCM key.
+Invite authentication uses a per-room random salt and scrypt-derived admission credential, verified directly by the server. The raw invite is not transmitted. LiveKit media uses the same E2EE room key; chat uses a purpose-separated AES-256-GCM key.
 
 Microphone capture and Web Crypto require an HTTPS secure context (`localhost` is allowed for development). Browser support for WebRTC E2EE, background audio, and output-device selection varies. A mobile browser may suspend or terminate a page after screen lock, so the Android app remains the recommended client for long-running background intercom use. WebSocket credentials are carried in the `Sec-WebSocket-Protocol` request header; configure Nginx and other reverse proxies not to log that header.
 
@@ -137,15 +137,15 @@ When Nginx and LiveKit run on the same host, they cannot both bind TCP 57881 and
 - An entirely empty room is removed 30 minutes after the final disconnect, even when the host selected a longer deadline.
 - Explicit host termination removes the room immediately.
 
-SQLite data lives in the `dawnmesh-data` volume. Back up the database together with `.env` and `livekit.yaml`. Invite codes and chat content are not written to SQLite. The server stores an E2EE room key wrapped by the administrator credential only when the host explicitly enables administrator listening.
+SQLite data lives in the `dawnmesh-data` volume. Back up the database together with `.env` and `livekit.yaml`. Invite codes and chat content are not written to SQLite. The database stores a per-room random salt, a SHA-256 admission verifier, and a client-encrypted room-key envelope. An additional administrator-wrapped key is stored only with host consent. Four-digit codes remain vulnerable to offline guessing after a database leak.
 
 ## Security
 
 New LiveKit join tokens start with audio publication disabled. After an authenticated management channel is established, the server applies the current persisted voice policy to the participant. Replaying an old token cannot restore revoked microphone access. Tokens expire after two minutes and API secrets stay server-side.
 
-A six-digit invitation is not strong enough to protect a public service by itself. Generate a high-entropy `DAWNMESH_ACCESS_TOKEN`. `DAWNMESH_ADMIN_TOKEN` also protects host-authorized listening keys, so keep it away from ordinary App users, restrict database and configuration permissions, and keep images updated.
+A four-digit invitation is not strong enough to protect a public service by itself. Generate a high-entropy `DAWNMESH_ACCESS_TOKEN`. `DAWNMESH_ADMIN_TOKEN` also protects host-authorized listening keys, so keep it away from ordinary App users, restrict database and configuration permissions, and keep images updated.
 
-The management protocol is documented in [`docs/API.md`](docs/API.md). It is versioned as `v1`; the Android client rejects incompatible versions and detects unexpected instance-ID changes.
+The management protocol is documented in [`docs/API.md`](docs/API.md). It is versioned as `2` (URLs retain `/api/v1`); the Android client rejects incompatible versions and detects unexpected instance-ID changes.
 
 ## Development
 
@@ -196,3 +196,5 @@ dialogs) to talk. Release, window blur, page hiding and pointer cancellation sto
 push-to-talk. Listening works independently of microphone permission. Click the
 sound button if autoplay is blocked. Public access requires HTTPS and a reverse
 proxy that preserves the client's microphone permissions policy.
+
+Server 0.2.5 accompanies Android 1.0.3. Recreate existing rooms after upgrading both clients and server. See [release notes](docs/RELEASE_0.2.5.md).

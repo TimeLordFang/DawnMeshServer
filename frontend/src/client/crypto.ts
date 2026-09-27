@@ -329,7 +329,7 @@ export interface PakeKeys { transcript: Bytes; sharedKey: Bytes; confirmA: Bytes
   }
 
   async function deriveInviteScalar(code: string) {
-    if (!/^(?:\d{4}|\d{6})$/.test(code)) throw new Error("请输入 4 位数字邀请码（兼容旧版 6 位）");
+    if (!/^\d{4}$/.test(code)) throw new Error("请输入 4 位数字邀请码");
     const bytes = await scrypt(utf8.encode(code), utf8.encode("DawnMesh SPAKE2 PIN v2"));
     return bigintFromBytes(bytes);
   }
@@ -406,3 +406,12 @@ export interface PakeKeys { transcript: Bytes; sharedKey: Bytes; confirmA: Bytes
 
 
 export { aesDecrypt, aesEncrypt, base64, base64Url, concat, dawnHkdf, deriveInviteScalar, fromBase64, hexBytes, timingSafeEqual, toHex, utf8 };
+
+// scrypt output is split into independent admission and AES key-wrapping keys.
+export async function internetInviteCredentials(code: string, salt: Bytes) {
+  if (!/^[0-9]{4}$/.test(code)) throw new Error('请输入 4 位数字邀请码');
+  if (salt.length !== 16) throw new Error('请升级服务端并重新创建房间');
+  const aad = concat(utf8.encode('DawnMesh internet invite v2'), salt);
+  const keys = await scrypt(utf8.encode(code), aad, 16384, 8, 1, 64);
+  return { credential: base64(keys.slice(0, 32)), wrappingKey: keys.slice(32), aad };
+}

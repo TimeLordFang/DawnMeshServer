@@ -64,7 +64,7 @@ func TestAdminListeningRequiresHostEscrowAndTracksLifetime(t *testing.T) {
 	server := testServer(t)
 	handler := server.Handler()
 	encodedKey := base64.URLEncoding.EncodeToString(make([]byte, 32))
-	createBody := `{"name":"可监听房间","nickname":"房主","deviceId":"123456789012345678901234","maxParticipants":25,"hostDisconnectTimeoutMinutes":10,"monitoringKey":"` + encodedKey + `"}`
+	createBody := `{"name":"可监听房间","nickname":"房主","deviceId":"123456789012345678901234","maxParticipants":25,"hostDisconnectTimeoutMinutes":10,"joinSalt":"AAAAAAAAAAAAAAAAAAAAAA==","joinCredential":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=","wrappedRoomKey":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA","monitoringKey":"` + encodedKey + `"}`
 	createRequest := httptest.NewRequest(http.MethodPost, "/api/v1/rooms", strings.NewReader(createBody))
 	createRequest.Header.Set("Authorization", "Bearer server-access")
 	createResponse := httptest.NewRecorder()

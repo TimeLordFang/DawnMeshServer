@@ -37,6 +37,10 @@ CREATE TABLE IF NOT EXISTS members (
  reconnect_deadline INTEGER
 );
 CREATE INDEX IF NOT EXISTS members_room_order ON members(room_id, join_order);
+CREATE TABLE IF NOT EXISTS room_join_credentials (
+ room_id TEXT PRIMARY KEY REFERENCES rooms(id) ON DELETE CASCADE,
+ salt BLOB NOT NULL, credential_hash BLOB NOT NULL, wrapped_key BLOB NOT NULL
+);
 CREATE TABLE IF NOT EXISTS room_presence_settings (
  room_id TEXT PRIMARY KEY REFERENCES rooms(id) ON DELETE CASCADE,
  announcements_enabled INTEGER NOT NULL DEFAULT 0
@@ -115,6 +119,30 @@ func (s *store) load(ctx context.Context) (map[string]*Room, map[string]*Member,
 	if err := rows.Close(); err != nil {
 		return nil, nil, err
 	}
+	joinRows, err := s.db.QueryContext(ctx, `SELECT room_id,salt,credential_hash,wrapped_key FROM room_join_credentials`)
+	if err != nil {
+		return nil, nil, err
+	}
+	for joinRows.Next() {
+		var id string
+		var salt, hash, wrapped []byte
+		if err := joinRows.Scan(&id, &salt, &hash, &wrapped); err != nil {
+			joinRows.Close()
+			return nil, nil, err
+		}
+		if room := rooms[id]; room != nil {
+			room.JoinSalt = salt
+			room.JoinCredentialHash = hash
+			room.WrappedRoomKey = wrapped
+		}
+	}
+	if err := joinRows.Err(); err != nil {
+		joinRows.Close()
+		return nil, nil, err
+	}
+	if err := joinRows.Close(); err != nil {
+		return nil, nil, err
+	}
 	presenceRows, err := s.db.QueryContext(ctx, `SELECT room_id,announcements_enabled FROM room_presence_settings`)
 	if err != nil {
 		return nil, nil, err
@@ -182,3 +210,8 @@ func (s *store) deleteRoom(ctx context.Context, id string) error {
 	return err
 }
 func (s *store) close() error { return s.db.Close() }
+
+func (s *store) saveJoinCredentials(ctx context.Context, room *Room) error {
+	_, err := s.db.ExecContext(ctx, `INSERT INTO room_join_credentials(room_id,salt,credential_hash,wrapped_key) VALUES(?,?,?,?)`, room.ID, room.JoinSalt, room.JoinCredentialHash, room.WrappedRoomKey)
+	return err
+}

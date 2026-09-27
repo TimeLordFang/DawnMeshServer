@@ -6,14 +6,14 @@
 [![Release](https://github.com/TimeLordFang/DawnMeshServer/actions/workflows/release.yml/badge.svg)](https://github.com/TimeLordFang/DawnMeshServer/actions/workflows/release.yml)
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](LICENSE)
 
-DawnMesh Server 是「曙光之声」公网对讲模式的自托管控制平面。它使用 SQLite 保存房间元数据，转发客户端之间的 SPAKE2 入房验证，执行房主管理策略，并签发短时、最小权限的 LiveKit 令牌。语音和聊天内容默认只由客户端持有的 LiveKit E2EE 密钥保护；房主也可以在建房时明确允许自部署服务器管理员实时收听。
+DawnMesh Server 是「曙光之声」公网对讲模式的自托管控制平面。它使用 SQLite 保存房间元数据，直接验证客户端的入房凭据，执行房主管理策略，并签发短时、最小权限的 LiveKit 令牌。语音和聊天内容默认只由客户端持有的 LiveKit E2EE 密钥保护；房主也可以在建房时明确允许自部署服务器管理员实时收听。
 
 本项目不申请或续期 HTTPS 证书。API 和 LiveKit 信令可以接入已有 Nginx，由 Nginx 完成 TLS 卸载。
 
 ## 功能
 
 - 一个房间默认最多 25 人，可通过 `DAWNMESH_MAX_PARTICIPANTS` 调整
-- 六位邀请码经 SPAKE2 验证，不进入 HTTP 请求、房间元数据、JWT 或服务端日志
+- 四位邀请码派生独立的入房凭据和密钥封装密钥；服务端验证凭据并返回加密密钥包，房主离线也能入房
 - 房主可修改房间名、关闭或恢复成员麦克风，并主动解散房间
 - 房主创建房间时可设置 1–60 分钟的最大断线保留时间
 - 房主超时后自动转让给最早在线成员；空房在最后一人离线 30 分钟后清理
@@ -75,14 +75,14 @@ docker compose up -d --build
 
 网页客户端与 Android 公网房使用同一套协议和房间：
 
-- 创建、发现和使用六位邀请码加入房间
-- P-256 SPAKE2 邀请码验证，邀请码不发送给服务器
+- 创建、发现和使用四位邀请码加入房间
+- 服务端直接验证入房凭据，邀请码原文不发送给服务器
 - LiveKit WebRTC 语音与 E2EE、加密文字消息
 - 按住说话和自动通话、清晰/平衡/省流三档音质
 - 收听与麦克风独立启用；没有输入设备时仍可使用扬声器收听
 - 成员头像、发言状态和稳定的加入顺序
 - 房主改名、成员封麦/开麦、转让房主和解散房间
-- 管理通道优先使用 WebSocket，并在代理拒绝升级时自动切换到普通 HTTPS 流；媒体断线时独立刷新短时令牌，并在十分钟成员保留窗口内自动恢复
+- 管理通道优先使用 WebSocket，并在代理拒绝升级时自动切换到普通 HTTPS 流；媒体断线时独立刷新短时令牌，并在半小时成员保留窗口内自动恢复
 - 响应式桌面和移动端布局
 
 浏览器麦克风和 Web Crypto 要求 HTTPS 安全上下文；`localhost` 仅用于本地开发。Safari、Chrome、Edge、Firefox 对 WebRTC E2EE、音频后台运行和输出设备切换的支持存在差异。移动浏览器进入锁屏或被系统回收后无法提供与 Android 前台服务相同的后台持续性，长时间对讲仍建议使用 Android App。网页端的 WebSocket 凭证通过 `Sec-WebSocket-Protocol` 请求头传递，Nginx 等反向代理不要记录该请求头。
@@ -145,15 +145,15 @@ LiveKit 容器使用 host network，直接监听宿主机的 IPv4 与 IPv6 通�
 - 房间完全空置后 30 分钟删除，即使房主设置了更长时间。
 - 房主主动解散房间时立即删除。
 
-SQLite 数据保存在 `dawnmesh-data` 卷中。备份时同时保存数据库、`.env` 和 `livekit.yaml`。邀请码和聊天内容不会写入 SQLite；仅当房主主动允许管理员收听时，服务器才会保存由管理员令牌加密封装的 E2EE 房间密钥。
+SQLite 数据保存在 `dawnmesh-data` 卷中。备份时同时保存数据库、`.env` 和 `livekit.yaml`。邀请码原文和聊天内容不会写入 SQLite。数据库保存每房随机盐、入房凭据的 SHA-256 摘要及客户端加密封装的房间密钥；管理员收听仍须房主主动允许，才额外保存由管理员令牌封装的密钥。四位码仍可能被离线穷举，不能把数据库泄露后的保护等同于高熵密码。
 
 ## 安全说明
 
 新的 LiveKit 入房令牌默认禁止发布音频。客户端建立经过认证的管理通道后，服务端才把当前持久化的发言策略应用到参与者；重放旧令牌不能恢复已被关闭的麦克风权限。令牌有效期为两分钟，API 密钥只保存在服务端。
 
-六位邀请码不适合作为公网服务的唯一访问凭据，请为 `DAWNMESH_ACCESS_TOKEN` 使用高熵随机值。`DAWNMESH_ADMIN_TOKEN` 还用于保护房主主动托管的监听密钥，必须单独保管，不能发送给普通 App 用户。公网部署还应限制数据库和配置文件权限，并定期更新镜像。
+四位邀请码不适合作为公网服务的唯一访问凭据，请为 `DAWNMESH_ACCESS_TOKEN` 使用高熵随机值。`DAWNMESH_ADMIN_TOKEN` 还用于保护房主主动托管的监听密钥，必须单独保管，不能发送给普通 App 用户。公网部署还应限制数据库和配置文件权限，并定期更新镜像。
 
-协议细节见 [`docs/API.md`](docs/API.md)。API 协议版本为 `v1`；Android 客户端会拒绝不兼容的协议版本，并检测服务实例 ID 的意外变化。
+协议细节见 [`docs/API.md`](docs/API.md)。API 协议版本为 `2`（URL 保留 `/api/v1`）；Android 客户端会拒绝不兼容的协议版本，并检测服务实例 ID 的意外变化。
 
 ## 开发与验证
 
@@ -190,3 +190,5 @@ DawnMesh Server 使用 [GNU Affero General Public License v3.0](LICENSE)（`AGPL
 前端源码位于 `frontend/`，生成资源写入 `internal/server/web/`，该目录属于构建产物，不纳入 Git。请使用 `./scripts/build.sh` 完成正式构建；若需要手动执行 `go build`、`go test` 或 `go vet`，必须先运行 `npm --prefix frontend ci && npm --prefix frontend run build`。Docker 和 GitHub Actions 会自动完成这一步。
 
 网页对讲支持在房间页面按住空格键通话；松开、切换窗口、页面隐藏或触摸取消立即停止按住通话。输入框及对话框不会触发此快捷键。首次发言需允许麦克风，收听不需要麦克风权限；若浏览器限制自动播放，请点击“启用收听”。公网访问须使用 HTTPS，且反向代理不能覆盖网页的麦克风权限策略。更新部署时请同步 `deploy/nginx.example.conf` 中的 `/ui/assets/` 路由，以加载新前端与加密 Worker。
+
+当前版本 0.2.5 配套 Android 1.0.3；升级后请重新创建公网房间。详见 [0.2.5 发布说明](docs/RELEASE_0.2.5.md)。

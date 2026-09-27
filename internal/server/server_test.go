@@ -75,7 +75,7 @@ func TestCreateRoomValidationAndLeastPrivilegeToken(t *testing.T) {
 	server := testServer(t)
 	request := httptest.NewRequest(http.MethodPost, "/api/v1/rooms", strings.NewReader(`{
       "name":"远程小队","nickname":"房主","deviceId":"123456789012345678901234",
-      "maxParticipants":25,"hostDisconnectTimeoutMinutes":60}`))
+      "maxParticipants":25,"hostDisconnectTimeoutMinutes":60,"joinSalt":"AAAAAAAAAAAAAAAAAAAAAA==","joinCredential":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=","wrappedRoomKey":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}`))
 	request.Header.Set("Authorization", "Bearer server-access")
 	response := httptest.NewRecorder()
 	server.Handler().ServeHTTP(response, request)

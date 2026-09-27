@@ -87,7 +87,7 @@ func TestBrowserWebSocketSubprotocolAuthenticatesWithoutURLCredentials(t *testin
 
 	createRequest, err := http.NewRequest(http.MethodPost, httpServer.URL+"/api/v1/rooms", strings.NewReader(`{
       "name":"浏览器房间","nickname":"网页房主","deviceId":"browser-device-1234567890123456",
-      "maxParticipants":25,"hostDisconnectTimeoutMinutes":10}`))
+      "maxParticipants":25,"hostDisconnectTimeoutMinutes":10,"joinSalt":"AAAAAAAAAAAAAAAAAAAAAA==","joinCredential":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=","wrappedRoomKey":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -230,7 +230,7 @@ func TestHTTPEventStreamFallbackReceivesManagementEvents(t *testing.T) {
 
 	createRequest, err := http.NewRequest(http.MethodPost, httpServer.URL+"/api/v1/rooms", strings.NewReader(`{
       "name":"Fallback Room","nickname":"Fallback Host","deviceId":"fallback-device-1234567890123456",
-      "maxParticipants":25,"hostDisconnectTimeoutMinutes":10}`))
+      "maxParticipants":25,"hostDisconnectTimeoutMinutes":10,"joinSalt":"AAAAAAAAAAAAAAAAAAAAAA==","joinCredential":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=","wrappedRoomKey":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}`))
 	if err != nil {
 		t.Fatal(err)
 	}

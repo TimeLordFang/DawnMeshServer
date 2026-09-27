@@ -1,8 +1,8 @@
-import { resetPresence, observePresence, memberLeft } from './presence';
+import { resetPresence, observePresence, memberLeft, displayMembers } from './presence';
 import * as DawnCrypto from './crypto';
 import { bindPressToTalk } from '../shared/press-to-talk';
 import { MicrophoneGate } from '../shared/microphone-gate';
-import type { ActiveRoom, ClientState, RoomSummary, Member, Grant, Admission, EnterRoom, ManagementEvent, EventChannel, ServerInfo } from './types';
+import type { ActiveRoom, ClientState, RoomSummary, Member, Grant, EnterRoom, ManagementEvent, EventChannel, ServerInfo } from './types';
 import * as LivekitClient from 'livekit-client';
 import workerURL from 'livekit-client/e2ee-worker?url';
 import { $ } from './dom';
@@ -290,16 +290,9 @@ function randomInvite() {
   return String(value[0] % 10000).padStart(4, "0");
 }
 
-function pakeIdentities(roomId: string, admissionId: string, memberId: string) {
-  return [
-    utf8.encode(`DawnMesh internet PAKE v1 client\0${state.info!.instanceId}\0${roomId}\0${admissionId}\0${memberId}`),
-    utf8.encode(`DawnMesh internet PAKE v1 host\0${state.info!.instanceId}\0${roomId}`),
-  ];
-}
-
 async function loadServer() {
   state.info = await api<ServerInfo>("/api/v1/info");
-  if (state.info!.protocolVersion !== 1) throw new RequestError(`不兼容的服务器协议版本：${state.info!.protocolVersion}`);
+  if (state.info!.protocolVersion !== 2) throw new RequestError(`不兼容的服务器协议版本：${state.info!.protocolVersion}`);
   $("#server-name").textContent = state.info!.name || "DawnMesh Server";
   $("#max-participants-input").max = String(state.info!.maxRoomParticipants);
   $("#max-participants-input").value = String(Math.min(25, state.info!.maxRoomParticipants));
@@ -375,10 +368,13 @@ async function createRoom() {
   try {
     const inviteCode = $("#create-invite-input").value.trim();
     const roomKey = crypto.getRandomValues(new Uint8Array(32));
-    const inviteScalar = await operation("邀请码密钥派生", () => DawnCrypto.deriveInviteScalar(inviteCode));
+    const salt = crypto.getRandomValues(new Uint8Array(16));
+    const keys = await operation("邀请码密钥派生", () => DawnCrypto.internetInviteCredentials(inviteCode, salt));
+    const wrappedRoomKey = DawnCrypto.base64(await DawnCrypto.aesEncrypt(keys.wrappingKey, roomKey, keys.aad));
     const chatCipher = await operation("聊天密钥初始化", () => DawnCrypto.ChatCipher.create(roomKey));
     setBusy(button, true, "正在创建…");
-    const body: { name: string; nickname: string; deviceId: string; maxParticipants: number; hostDisconnectTimeoutMinutes: number; monitoringKey?: string } = {
+    const body: { name: string; nickname: string; deviceId: string; maxParticipants: number; hostDisconnectTimeoutMinutes: number; monitoringKey?: string; joinSalt: string; joinCredential: string; wrappedRoomKey: string } = {
+      joinSalt: DawnCrypto.base64(salt), joinCredential: keys.credential, wrappedRoomKey,
       name: $("#room-name-input").value.trim(),
       nickname: state.nickname,
       deviceId: state.deviceId,
@@ -388,7 +384,7 @@ async function createRoom() {
     if ($("#allow-monitoring").checked) body.monitoringKey = mediaKey(DawnCrypto.base64Url(roomKey));
     const grant = await operation("服务端创建房间", () => api<Grant>("/api/v1/rooms", { method: "POST", body: JSON.stringify(body) }));
     $("#create-dialog").close();
-    await enterRoom({ grant, roomKey, inviteCode, inviteScalar, chatCipher });
+    await enterRoom({ grant, roomKey, inviteCode, chatCipher });
   } catch (_cause) { const cause = asError(_cause);
     error.textContent = errorText(cause);
   } finally {
@@ -396,61 +392,26 @@ async function createRoom() {
   }
 }
 
-async function completeAdmission(roomId: string, inviteCode: string) {
-  const admission = await api<Admission>(`/api/v1/rooms/${encodeURIComponent(roomId)}/admissions`, {
-    method: "POST",
-    body: JSON.stringify({ nickname: state.nickname, deviceId: state.deviceId }),
+async function completeAdmission(roomId: string, inviteCode: string): Promise<EnterRoom> {
+  const rooms = await api<{rooms: RoomSummary[]}>('/api/v1/rooms');
+  const room = rooms.rooms.find(r => r.id === roomId);
+  if (!room?.joinSalt) throw new RequestError('请升级服务端并重新创建房间');
+  const keys = await operation('邀请码密钥派生', () => DawnCrypto.internetInviteCredentials(inviteCode.trim(), DawnCrypto.fromBase64(room.joinSalt!)));
+  const grant = await api<Grant & {wrappedRoomKey: string}>(`/api/v1/rooms/${encodeURIComponent(roomId)}/join`, {
+    method: 'POST', body: JSON.stringify({nickname: state.nickname, deviceId: state.deviceId, joinCredential: keys.credential}),
   });
-  const scalar = await operation("邀请码密钥派生", () => DawnCrypto.deriveInviteScalar(inviteCode));
-  const pake = new DawnCrypto.Spake2({ isA: true, passwordScalar: scalar });
-  const socket = await openEventChannel(admission.eventsUrl, admission.resumeToken, () => {});
-  return new Promise<EnterRoom>((resolve, reject) => {
-    let keys: DawnCrypto.PakeKeys | null = null;
-    let settled = false;
-    const timer = window.setTimeout(() => finish(new RequestError("邀请码验证超时")), 20000);
-    const finish = (error: unknown, value?: Omit<EnterRoom, "inviteScalar">) => {
-      if (settled) return;
-      settled = true;
-      window.clearTimeout(timer);
-      socket.close(1000, "admission complete");
-      error ? reject(error) : resolve({ ...value!, inviteScalar: scalar });
-    };
-    socket.addEventListener("message", async (message) => {
-      try {
-        const event = JSON.parse((message as MessageEvent<string>).data) as ManagementEvent;
-        if (event.admissionId !== admission.admissionId) return;
-        if (event.type === "pake_reply") {
-          const packet = DawnCrypto.fromBase64(event.body);
-          if (packet.length !== 97) throw new RequestError("邀请码验证响应无效");
-          const identities = pakeIdentities(roomId, admission.admissionId, admission.memberId);
-          keys = await operation("邀请码验证", () => pake.finish(packet.slice(0, 65), identities[0], identities[1]));
-          if (!DawnCrypto.timingSafeEqual(packet.slice(65), keys.confirmB)) throw new RequestError("邀请码不正确");
-          socket.send(JSON.stringify({ type: "pake_confirm", admissionId: admission.admissionId, body: DawnCrypto.base64(keys.confirmA) }));
-        } else if (event.type === "pake_key") {
-          if (!keys) throw new RequestError("邀请码验证状态无效");
-          const wrappingKey = await DawnCrypto.dawnHkdf(keys.sharedKey, "DawnMesh internet room key wrapping v1");
-          const roomKey = await operation("房间密钥解密", () => DawnCrypto.aesDecrypt(wrappingKey, DawnCrypto.fromBase64(event.body), utf8.encode(admission.admissionId)));
-          if (roomKey.length !== 32) throw new RequestError("房间密钥无效");
-          finish(null, { grant: event.connection, roomKey, inviteCode });
-        } else if (event.type === "admission_rejected" || event.type === "error") {
-          finish(new RequestError(event.error || "邀请码验证失败"));
-        }
-      } catch (_cause) { const cause = asError(_cause); finish(cause); }
-    });
-    socket.addEventListener("close", () => finish(new RequestError("房主连接已中断")), { once: true });
-    socket.addEventListener("error", () => finish(new RequestError("邀请码验证连接失败")), { once: true });
-    socket.send(JSON.stringify({ type: "pake_hello", admissionId: admission.admissionId, body: DawnCrypto.base64(pake.message) }));
-  });
+  const roomKey = await DawnCrypto.aesDecrypt(keys.wrappingKey, DawnCrypto.fromBase64(grant.wrappedRoomKey), keys.aad);
+  if (roomKey.length !== 32) throw new RequestError('房间密钥无效');
+  return {grant, roomKey, inviteCode};
 }
 
-async function enterRoom({ grant, roomKey, inviteCode, inviteScalar, chatCipher = null }: EnterRoom) {
+async function enterRoom({ grant, roomKey, inviteCode, chatCipher = null }: EnterRoom) {
   window.clearInterval(state.roomsTimer);
   const roomChatCipher = chatCipher || await operation("聊天密钥初始化", () => DawnCrypto.ChatCipher.create(roomKey));
   state.active = {
     grant,
     roomKey,
     inviteCode,
-    inviteScalar,
     memberId: grant.memberId,
     resumeToken: grant.resumeToken,
     summary: grant.room,
@@ -463,7 +424,6 @@ async function enterRoom({ grant, roomKey, inviteCode, inviteScalar, chatCipher 
     audioProfile: (navigator as Navigator & { connection?: { saveData?: boolean } }).connection?.saveData ? "data" : "clarity",
     speaking: new Set(),
     messages: [],
-    hostAdmissions: new Map(),
     chatCipher: roomChatCipher,
     socket: null,
     room: null,
@@ -555,14 +515,12 @@ async function handleManagementEvent(event: ManagementEvent) {
     active.isHost = event.hostMemberId === active.memberId;
     active.canSpeak = event.canSpeak ?? active.canSpeak;
     active.members = event.members || active.members;
-    observePresence(active, active.members);
     if (becameHost) revealInvite();
     if (!active.isHost) hideInvite(true);
     await applyMicrophone(currentMicWanted());
     renderRoom();
   } else if (event.type === "room_updated") {
     active.summary = event.room;
-    observePresence(active, active.members);
     renderRoom();
   } else if (event.type === "member_left") {
     memberLeft(active, event.memberId, event.nickname || '成员', event.eventId || '');
@@ -584,37 +542,8 @@ async function handleManagementEvent(event: ManagementEvent) {
     await handleRoomEnded(active);
   } else if (event.type === "error") {
     toast(event.error || "管理操作失败");
-  } else if (event.type === "pake_hello" && active.isHost) {
-    await hostPakeHello(event);
-  } else if (event.type === "pake_confirm" && active.isHost) {
-    await hostPakeConfirm(event);
-  }
-}
 
-async function hostPakeHello(event: ManagementEvent) {
-  const active = state.active!;
-  const packet = DawnCrypto.fromBase64(event.body);
-  if (packet.length !== 65 || active.hostAdmissions.size >= 8) return;
-  for (const [id, pending] of active.hostAdmissions) if (Date.now() - pending.created > 30000) active.hostAdmissions.delete(id);
-  const pake = new DawnCrypto.Spake2({ isA: false, passwordScalar: active.inviteScalar });
-  const identities = pakeIdentities(active.summary.id, event.admissionId, event.memberId);
-  const keys = await pake.finish(packet, identities[0], identities[1]);
-  active.hostAdmissions.set(event.admissionId, { keys, created: Date.now() });
-  sendEvent({ type: "pake_reply", admissionId: event.admissionId, body: DawnCrypto.base64(DawnCrypto.concat(pake.message, keys.confirmB)) });
-}
-
-async function hostPakeConfirm(event: ManagementEvent) {
-  const active = state.active!;
-  const pending = active.hostAdmissions.get(event.admissionId);
-  active.hostAdmissions.delete(event.admissionId);
-  const confirm = DawnCrypto.fromBase64(event.body);
-  if (!pending || !DawnCrypto.timingSafeEqual(confirm, pending.keys.confirmA)) {
-    sendEvent({ type: "admission_rejected", admissionId: event.admissionId });
-    return;
   }
-  const wrappingKey = await DawnCrypto.dawnHkdf(pending.keys.sharedKey, "DawnMesh internet room key wrapping v1");
-  const packet = await DawnCrypto.aesEncrypt(wrappingKey, active.roomKey, utf8.encode(event.admissionId));
-  sendEvent({ type: "pake_key", admissionId: event.admissionId, body: DawnCrypto.base64(packet) });
 }
 
 function sendEvent(value: Partial<ManagementEvent>) {
@@ -851,6 +780,9 @@ async function connectMedia(grant: Grant) {
     active.remoteAudioTracks = Math.max(0, active.remoteAudioTracks - 1);
     renderAudioSetup();
   });
+  for (const event of [LivekitClient.RoomEvent.ParticipantConnected, LivekitClient.RoomEvent.ParticipantDisconnected]) {
+    room.on(event, () => { if (state.active === active && active.room === room && !active.leaving) renderMembers(); });
+  }
   room.on(LivekitClient.RoomEvent.ActiveSpeakersChanged, (speakers) => {
     if (state.active !== active || active.room !== room || active.leaving) return;
     active.speaking = new Set(speakers.map((participant) => participant.identity));
@@ -896,15 +828,17 @@ async function connectMedia(grant: Grant) {
   });
   room.on(LivekitClient.RoomEvent.Reconnecting, () => {
     if (state.active !== active || active.room !== room) return;
+    resetPresence(active);
     stopPTT(active);
     void active.micGate?.set(false);
     setRoomStatus("reconnecting", "媒体连接波动，正在恢复");
     renderTalkState();
   });
-  room.on(LivekitClient.RoomEvent.Reconnected, () => { updateConnectionStatus(active); void applyMicrophone(currentMicWanted()); });
+  room.on(LivekitClient.RoomEvent.Reconnected, () => { resetPresence(active); renderMembers(); updateConnectionStatus(active); void applyMicrophone(currentMicWanted()); });
   room.on(LivekitClient.RoomEvent.Disconnected, (reason) => {
     if (active.intentionalMediaDisconnects?.has(room)) return;
     if (state.active === active && !active.leaving) {
+      resetPresence(active);
       stopPTT(active);
       void active.micGate?.set(false);
       renderTalkState();
@@ -925,6 +859,7 @@ async function connectMedia(grant: Grant) {
   await operation("LiveKit 端到端加密启用", () => room.setE2EEEnabled(true));
   if (state.active !== active || active.leaving || active.room !== room) { worker.terminate(); return; }
   await operation("LiveKit 媒体连接", () => room.connect(grant.livekitUrl, grant.livekitToken, { autoSubscribe: true }));
+  resetPresence(active); renderMembers();
   if (state.active !== active || active.leaving || active.room !== room) {
     await room.disconnect(); worker.terminate(); return;
   }
@@ -1102,7 +1037,7 @@ function renderInvite() {
   const card = $("#invite-card");
   card.hidden = !active?.isHost;
   if (!active?.isHost) return;
-  $("#invite-code").textContent = active.inviteVisible ? active.inviteCode : "••••••";
+  $("#invite-code").textContent = active.inviteVisible ? active.inviteCode : "••••";
   $("#toggle-invite").textContent = active.inviteVisible ? "◉" : "◎";
   $("#toggle-invite").setAttribute("aria-label", active.inviteVisible ? "隐藏邀请码" : "显示邀请码");
 }
@@ -1118,7 +1053,9 @@ function renderMembers() {
   const grid = $("#member-grid");
   grid.replaceChildren();
   $("#member-count").textContent = `${active.members.length} 人`;
-  for (const member of active.members) {
+  const displayed = displayMembers(active);
+  if (active.room?.state === "connected") observePresence(active, displayed);
+  for (const member of displayed) {
     const card = document.createElement("article");
     card.className = `member-card${active.speaking.has(member.id) ? " speaking" : ""}`;
     const avatar = document.createElement("div");
@@ -1659,7 +1596,7 @@ $("#presence-announcements").addEventListener("click", async () => {
       method: 'PUT', sessionToken: active.resumeToken,
       body: JSON.stringify({enabled: !active.summary.presenceAnnouncementsEnabled}),
     });
-    if (state.active === active) { active.summary = response.room; observePresence(active, active.members); renderRoom(); }
+    if (state.active === active) { active.summary = response.room; renderRoom(); }
   } catch (error) { toast(errorText(error)); }
   finally { if (state.active === active) button.disabled = false; }
 });

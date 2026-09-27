@@ -1,7 +1,6 @@
 package server
 
 import (
-	"context"
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
@@ -11,28 +10,23 @@ import (
 
 type eventStream chan []byte
 
-func (s *Server) eventPrincipal(token string) (*Member, *Admission) {
+func (s *Server) eventPrincipal(token string) *Member {
 	hash := tokenHash(token)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for _, member := range s.members {
 		if subtle.ConstantTimeCompare(member.ResumeTokenHash, hash) == 1 {
-			return member, nil
+			return member
 		}
 	}
-	for _, admission := range s.admissions {
-		if subtle.ConstantTimeCompare(admission.ResumeTokenHash, hash) == 1 {
-			return nil, admission
-		}
-	}
-	return nil, nil
+	return nil
 }
 
 // eventHTTPStream is a fetch-stream fallback for deployments whose reverse
 // proxy cannot upgrade WebSockets. Each line is one JSON management event.
 func (s *Server) eventHTTPStream(w http.ResponseWriter, r *http.Request) {
-	member, admission := s.eventPrincipal(eventSessionToken(r))
-	if member == nil && admission == nil {
+	member := s.eventPrincipal(eventSessionToken(r))
+	if member == nil {
 		writeError(w, http.StatusUnauthorized, "会话无效")
 		return
 	}
@@ -41,7 +35,7 @@ func (s *Server) eventHTTPStream(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "服务器不支持流式响应")
 		return
 	}
-	streamID := memberID(member, admission)
+	streamID := member.ID
 	stream := make(eventStream, 64)
 	s.addEventStream(streamID, stream)
 	defer func() {
@@ -60,11 +54,6 @@ func (s *Server) eventHTTPStream(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
-	if admission != nil {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, 35*time.Second)
-		defer cancel()
-	}
 	heartbeat := time.NewTicker(15 * time.Second)
 	defer heartbeat.Stop()
 	for {
@@ -86,8 +75,8 @@ func (s *Server) eventHTTPStream(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) eventHTTPSend(w http.ResponseWriter, r *http.Request) {
-	member, admission := s.eventPrincipal(eventSessionToken(r))
-	if member == nil && admission == nil {
+	member := s.eventPrincipal(eventSessionToken(r))
+	if member == nil {
 		writeError(w, http.StatusUnauthorized, "会话无效")
 		return
 	}
@@ -95,7 +84,7 @@ func (s *Server) eventHTTPSend(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSON(w, r, &event) {
 		return
 	}
-	if err := s.routeEvent(r.Context(), member, admission, event); err != nil {
+	if err := s.routeEvent(r.Context(), member, event); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}

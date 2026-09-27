@@ -56,3 +56,16 @@ export function memberLeft(active: ActiveRoom, id: string, name: string, eventId
   clearTimeout(pending.get(id)); pending.delete(id);
   speak(active, name, true);
 }
+
+const displayedOnline = new WeakMap<ActiveRoom, Map<string, boolean>>();
+export function displayMembers(active: ActiveRoom): Member[] {
+  const previous = displayedOnline.get(active) ?? new Map<string, boolean>();
+  const room = active.room;
+  const ids = room?.state === 'connected'
+    ? new Set([active.memberId, ...Array.from(room.remoteParticipants.values(), p => p.identity)]) : null;
+  const members = active.members.map(m => ({...m,
+    connected: ids ? ids.has(m.id) : (previous.get(m.id) ?? true),
+  }));
+  displayedOnline.set(active, new Map(members.map(m => [m.id, m.connected])));
+  return members;
+}

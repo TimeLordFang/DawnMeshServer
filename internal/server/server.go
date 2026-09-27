@@ -35,7 +35,6 @@ type Server struct {
 	wsWriteMu    sync.Mutex
 	rooms        map[string]*Room
 	members      map[string]*Member
-	admissions   map[string]*Admission
 	sockets      map[string]map[*websocket.Conn]struct{}
 	eventStreams map[string]map[eventStream]struct{}
 	attempts     map[string][]time.Time
@@ -53,7 +52,7 @@ func New(cfg config.Config) (*Server, error) {
 		db.close()
 		return nil, err
 	}
-	server := &Server{cfg: cfg, startedAt: time.Now().UTC(), store: db, livekit: newLiveKitManager(cfg.LiveKitURL, cfg.LiveKitPublicURL, cfg.LiveKitAPIKey, cfg.LiveKitAPISecret), rooms: rooms, members: members, admissions: map[string]*Admission{}, sockets: map[string]map[*websocket.Conn]struct{}{}, eventStreams: map[string]map[eventStream]struct{}{}, attempts: map[string][]time.Time{}, monitors: map[string]*monitorSession{}, stop: make(chan struct{})}
+	server := &Server{cfg: cfg, startedAt: time.Now().UTC(), store: db, livekit: newLiveKitManager(cfg.LiveKitURL, cfg.LiveKitPublicURL, cfg.LiveKitAPIKey, cfg.LiveKitAPISecret), rooms: rooms, members: members, sockets: map[string]map[*websocket.Conn]struct{}{}, eventStreams: map[string]map[eventStream]struct{}{}, attempts: map[string][]time.Time{}, monitors: map[string]*monitorSession{}, stop: make(chan struct{})}
 	now := time.Now().UTC()
 	for _, room := range rooms {
 		if room.EmptyDeadline.IsZero() {
@@ -95,7 +94,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/v1/media-health", s.withAccess(s.mediaHealth))
 	mux.HandleFunc("GET /api/v1/rooms", s.withAccess(s.listRooms))
 	mux.HandleFunc("POST /api/v1/rooms", s.withAccess(s.createRoom))
-	mux.HandleFunc("POST /api/v1/rooms/{room}/admissions", s.withAccess(s.createAdmission))
+	mux.HandleFunc("POST /api/v1/rooms/{room}/join", s.withAccess(s.joinRoom))
 	mux.HandleFunc("POST /api/v1/rooms/{room}/resume", s.withAccess(s.resume))
 	mux.HandleFunc("POST /api/v1/rooms/{room}/media-grant", s.withSession(s.mediaGrant))
 	mux.HandleFunc("PATCH /api/v1/rooms/{room}", s.withSession(s.renameRoom))
@@ -193,7 +192,7 @@ func (s *Server) withSession(next func(http.ResponseWriter, *http.Request, *Memb
 }
 
 func (s *Server) info(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{"instanceId": s.cfg.InstanceID, "name": s.cfg.InstanceName, "protocolVersion": 1, "maxRoomParticipants": s.cfg.MaximumParticipants, "adminListeningSupported": s.cfg.AdminToken != ""})
+	writeJSON(w, http.StatusOK, map[string]any{"instanceId": s.cfg.InstanceID, "name": s.cfg.InstanceName, "protocolVersion": 2, "maxRoomParticipants": s.cfg.MaximumParticipants, "adminListeningSupported": s.cfg.AdminToken != ""})
 }
 
 func (s *Server) mediaHealth(w http.ResponseWriter, r *http.Request) {
@@ -219,6 +218,9 @@ func (s *Server) listRooms(w http.ResponseWriter, _ *http.Request) {
 }
 
 type createRoomRequest struct {
+	JoinSalt        string `json:"joinSalt"`
+	JoinCredential  string `json:"joinCredential"`
+	WrappedRoomKey  string `json:"wrappedRoomKey"`
 	Name            string `json:"name"`
 	Nickname        string `json:"nickname"`
 	DeviceID        string `json:"deviceId"`
@@ -238,6 +240,13 @@ func (s *Server) createRoom(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "房间参数无效")
 		return
 	}
+	salt, saltErr := base64.StdEncoding.DecodeString(body.JoinSalt)
+	credential, credentialErr := base64.StdEncoding.DecodeString(body.JoinCredential)
+	wrapped, wrappedErr := base64.StdEncoding.DecodeString(body.WrappedRoomKey)
+	if saltErr != nil || credentialErr != nil || wrappedErr != nil || len(salt) != 16 || len(credential) != 32 || len(wrapped) != 60 {
+		writeError(w, http.StatusBadRequest, "房间验证参数无效，请使用最新客户端")
+		return
+	}
 	roomID := randomID(18)
 	var wrappedMonitoringKey []byte
 	if body.MonitoringKey != "" {
@@ -255,7 +264,7 @@ func (s *Server) createRoom(w http.ResponseWriter, r *http.Request) {
 	memberID := randomID(18)
 	resume := randomID(32)
 	now := time.Now().UTC()
-	room := &Room{ID: roomID, Name: body.Name, HostMemberID: memberID, HostNickname: body.Nickname, MaxParticipants: body.MaxParticipants, HostDisconnectTimeoutMinutes: body.HostTimeout, CreatedAt: now, MonitoringKey: wrappedMonitoringKey}
+	room := &Room{JoinSalt: salt, JoinCredentialHash: tokenHash(base64.StdEncoding.EncodeToString(credential)), WrappedRoomKey: wrapped, ID: roomID, Name: body.Name, HostMemberID: memberID, HostNickname: body.Nickname, MaxParticipants: body.MaxParticipants, HostDisconnectTimeoutMinutes: body.HostTimeout, CreatedAt: now, MonitoringKey: wrappedMonitoringKey}
 	member := &Member{ID: memberID, RoomID: roomID, Nickname: body.Nickname, DeviceID: body.DeviceID, ResumeTokenHash: tokenHash(resume), CanSpeak: true, JoinOrder: 1, IsHost: true}
 	s.mu.Lock()
 	if len(s.rooms) >= s.cfg.MaximumRooms || !s.allowAttemptLocked("create:ip:"+clientIP(r), 10, time.Minute) || !s.allowAttemptLocked("create:device:"+body.DeviceID, 3, time.Minute) {
@@ -282,9 +291,15 @@ func (s *Server) createRoom(w http.ResponseWriter, r *http.Request) {
 	if len(room.MonitoringKey) > 0 {
 		err3 = s.store.saveMonitoringKey(r.Context(), room.ID, room.MonitoringKey)
 	}
+	err4 := s.store.saveJoinCredentials(r.Context(), room)
 	grant, grantErr := s.connectionGrant(room, member, resume)
+	if err1 != nil || err2 != nil || err3 != nil || err4 != nil || grantErr != nil {
+		delete(s.rooms, room.ID)
+		delete(s.members, member.ID)
+		_ = s.store.deleteRoom(r.Context(), room.ID)
+	}
 	s.mu.Unlock()
-	if err1 != nil || err2 != nil || err3 != nil {
+	if err1 != nil || err2 != nil || err3 != nil || err4 != nil {
 		writeError(w, http.StatusInternalServerError, "无法保存房间")
 		return
 	}
@@ -293,61 +308,6 @@ func (s *Server) createRoom(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusCreated, grant)
-}
-
-type admissionRequest struct {
-	Nickname string `json:"nickname"`
-	DeviceID string `json:"deviceId"`
-}
-
-func (s *Server) createAdmission(w http.ResponseWriter, r *http.Request) {
-	var body admissionRequest
-	if !decodeJSON(w, r, &body) {
-		return
-	}
-	body.Nickname = strings.TrimSpace(body.Nickname)
-	roomID := r.PathValue("room")
-	if body.Nickname == "" || len([]byte(body.Nickname)) > 96 || len(body.DeviceID) < 24 {
-		writeError(w, http.StatusBadRequest, "成员参数无效")
-		return
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if !s.allowAttemptLocked("join:ip:"+clientIP(r), 20, time.Minute) || !s.allowAttemptLocked("join:device:"+body.DeviceID, 10, time.Minute) {
-		writeError(w, http.StatusTooManyRequests, "加入请求过于频繁，请稍后再试")
-		return
-	}
-	room := s.rooms[roomID]
-	if room == nil {
-		writeError(w, http.StatusNotFound, "房间不存在")
-		return
-	}
-	if s.memberCount(roomID) >= room.MaxParticipants {
-		writeError(w, http.StatusConflict, "房间已满")
-		return
-	}
-	roomPending := 0
-	devicePending := 0
-	for _, pending := range s.admissions {
-		if pending.RoomID == roomID {
-			roomPending++
-		}
-		if pending.DeviceID == body.DeviceID {
-			devicePending++
-		}
-	}
-	if len(s.admissions) >= 512 || roomPending >= 8 || devicePending >= 3 {
-		writeError(w, http.StatusTooManyRequests, "待验证请求过多，请稍后再试")
-		return
-	}
-	if !s.isOnline(room.HostMemberID) {
-		writeError(w, http.StatusConflict, "房主暂时离线，无法验证邀请码")
-		return
-	}
-	resume := randomID(32)
-	admission := &Admission{ID: randomID(18), RoomID: roomID, MemberID: randomID(18), Nickname: body.Nickname, DeviceID: body.DeviceID, ResumeToken: resume, ResumeTokenHash: tokenHash(resume), CreatedAt: time.Now().UTC()}
-	s.admissions[admission.ID] = admission
-	writeJSON(w, http.StatusCreated, map[string]any{"room": s.roomJSON(room), "admissionId": admission.ID, "memberId": admission.MemberID, "resumeToken": resume, "eventsUrl": s.cfg.PublicBaseURL + "/api/v1/events"})
 }
 
 type resumeRequest struct {
@@ -577,8 +537,8 @@ func (s *Server) endRoom(w http.ResponseWriter, r *http.Request, caller *Member)
 }
 
 func (s *Server) events(w http.ResponseWriter, r *http.Request) {
-	member, admission := s.eventPrincipal(eventSessionToken(r))
-	if member == nil && admission == nil {
+	member := s.eventPrincipal(eventSessionToken(r))
+	if member == nil {
 		slog.Warn("management websocket session rejected", "remote", clientIP(r), "host", r.Host)
 		writeError(w, http.StatusUnauthorized, "会话无效")
 		return
@@ -593,7 +553,7 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 	}
 	defer conn.CloseNow()
 	conn.SetReadLimit(8 << 10)
-	socketID := memberID(member, admission)
+	socketID := member.ID
 	s.addSocket(socketID, conn)
 	keepAliveContext, stopKeepAlive := context.WithCancel(r.Context())
 	defer stopKeepAlive()
@@ -603,18 +563,13 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 		s.send(conn, map[string]any{"type": "snapshot", "room": s.roomJSONSafe(member.RoomID), "hostMemberId": s.hostID(member.RoomID), "canSpeak": member.CanSpeak, "members": s.membersJSONSafe(member.RoomID)})
 	}
 	readContext := r.Context()
-	if admission != nil {
-		var cancel context.CancelFunc
-		readContext, cancel = context.WithTimeout(readContext, 35*time.Second)
-		defer cancel()
-	}
 	var readErr error
 	for {
 		var event map[string]any
 		if readErr = wsjson.Read(readContext, conn, &event); readErr != nil {
 			break
 		}
-		if err := s.routeEvent(r.Context(), member, admission, event); err != nil {
+		if err := s.routeEvent(r.Context(), member, event); err != nil {
 			s.send(conn, map[string]any{"type": "error", "error": err.Error()})
 		}
 	}
@@ -660,7 +615,7 @@ func keepEventSocketAlive(ctx context.Context, conn *websocket.Conn, socketID st
 	}
 }
 
-func (s *Server) routeEvent(ctx context.Context, member *Member, admission *Admission, event map[string]any) error {
+func (s *Server) routeEvent(ctx context.Context, member *Member, event map[string]any) error {
 	typeName, _ := event["type"].(string)
 	if typeName == "media_ready" {
 		if member == nil {
@@ -686,88 +641,7 @@ func (s *Server) routeEvent(ctx context.Context, member *Member, admission *Admi
 		}
 		return fmt.Errorf("media permission: %w", updateErr)
 	}
-	admissionID, _ := event["admissionId"].(string)
-	body, _ := event["body"].(string)
-	if len(body) > 4096 {
-		return errors.New("event too large")
-	}
-	s.mu.Lock()
-	pending := s.admissions[admissionID]
-	if pending == nil {
-		s.mu.Unlock()
-		return errors.New("admission expired")
-	}
-	room := s.rooms[pending.RoomID]
-	if room == nil {
-		s.mu.Unlock()
-		return errors.New("room ended")
-	}
-	switch typeName {
-	case "pake_hello", "pake_confirm":
-		if admission == nil || admission.ID != pending.ID {
-			s.mu.Unlock()
-			return errors.New("invalid admission sender")
-		}
-		target := room.HostMemberID
-		s.mu.Unlock()
-		event["memberId"] = pending.MemberID
-		s.sendTo(target, event)
-		return nil
-	case "pake_reply":
-		if member == nil || member.ID != room.HostMemberID {
-			s.mu.Unlock()
-			return errors.New("host required")
-		}
-		target := pending.MemberID
-		s.mu.Unlock()
-		s.sendTo(target, event)
-		return nil
-	case "admission_rejected":
-		if member == nil || member.ID != room.HostMemberID {
-			s.mu.Unlock()
-			return errors.New("host required")
-		}
-		delete(s.admissions, pending.ID)
-		target := pending.MemberID
-		s.mu.Unlock()
-		s.sendTo(target, event)
-		return nil
-	case "pake_key":
-		if member == nil || member.ID != room.HostMemberID {
-			s.mu.Unlock()
-			return errors.New("host required")
-		}
-		if time.Since(pending.CreatedAt) > 30*time.Second {
-			s.mu.Unlock()
-			return errors.New("admission expired")
-		}
-		if s.memberCount(room.ID) >= room.MaxParticipants {
-			s.mu.Unlock()
-			return errors.New("room full")
-		}
-		joinOrder := 1
-		for _, item := range s.members {
-			if item.RoomID == room.ID && item.JoinOrder >= joinOrder {
-				joinOrder = item.JoinOrder + 1
-			}
-		}
-		joined := &Member{ID: pending.MemberID, RoomID: room.ID, Nickname: pending.Nickname, DeviceID: pending.DeviceID, ResumeTokenHash: pending.ResumeTokenHash, CanSpeak: true, JoinOrder: joinOrder, Connected: false, ReconnectDeadline: time.Now().UTC().Add(reconnectRetention)}
-		s.members[joined.ID] = joined
-		delete(s.admissions, pending.ID)
-		_ = s.store.saveMember(ctx, joined)
-		grant, err := s.connectionGrant(room, joined, pending.ResumeToken)
-		s.mu.Unlock()
-		if err != nil {
-			return err
-		}
-		event["connection"] = grant
-		s.sendTo(joined.ID, event)
-		s.broadcastSnapshot(room.ID)
-		return nil
-	default:
-		s.mu.Unlock()
-		return errors.New("unsupported event")
-	}
+	return errors.New("unsupported event")
 }
 
 func (s *Server) connectionGrant(room *Room, member *Member, resume string) (map[string]any, error) {
@@ -781,17 +655,12 @@ func (s *Server) connectionGrant(room *Room, member *Member, resume string) (map
 }
 
 func (s *Server) roomJSON(room *Room) map[string]any {
-	return map[string]any{"id": room.ID, "name": room.Name, "memberCount": s.memberCount(room.ID), "maxParticipants": room.MaxParticipants, "hostNickname": room.HostNickname, "hostDisconnectTimeoutMinutes": room.HostDisconnectTimeoutMinutes, "presenceAnnouncementsSupported": true, "presenceAnnouncementsEnabled": room.PresenceAnnouncementsEnabled, "adminListeningAvailable": len(room.MonitoringKey) > 0, "adminListening": s.monitorCountLocked(room.ID) > 0}
+	return map[string]any{"joinSalt": base64.StdEncoding.EncodeToString(room.JoinSalt), "id": room.ID, "name": room.Name, "memberCount": s.memberCount(room.ID), "maxParticipants": room.MaxParticipants, "hostNickname": room.HostNickname, "hostDisconnectTimeoutMinutes": room.HostDisconnectTimeoutMinutes, "presenceAnnouncementsSupported": true, "presenceAnnouncementsEnabled": room.PresenceAnnouncementsEnabled, "adminListeningAvailable": len(room.MonitoringKey) > 0, "adminListening": s.monitorCountLocked(room.ID) > 0}
 }
 func (s *Server) memberCount(roomID string) int {
 	count := 0
 	for _, m := range s.members {
 		if m.RoomID == roomID {
-			count++
-		}
-	}
-	for _, a := range s.admissions {
-		if a.RoomID == roomID {
 			count++
 		}
 	}
@@ -837,6 +706,12 @@ func (s *Server) isOnline(id string) bool {
 
 func (s *Server) markConnected(id string, connected bool) {
 	s.mu.Lock()
+	// A delayed close callback from an old stream must not overwrite a newly
+	// established connection. Check under the same lock as the state mutation.
+	if !connected && (len(s.sockets[id]) > 0 || len(s.eventStreams[id]) > 0) {
+		s.mu.Unlock()
+		return
+	}
 	member := s.members[id]
 	if member == nil {
 		s.mu.Unlock()
@@ -894,11 +769,6 @@ func (s *Server) sweep(now time.Time) {
 	s.mu.Lock()
 	changed := map[string]bool{}
 	deleteRooms := []string{}
-	for id, admission := range s.admissions {
-		if now.Sub(admission.CreatedAt) > 30*time.Second {
-			delete(s.admissions, id)
-		}
-	}
 	for key, attempts := range s.attempts {
 		if len(attempts) == 0 || now.Sub(attempts[len(attempts)-1]) > time.Minute {
 			delete(s.attempts, key)
@@ -1073,12 +943,6 @@ func (s *Server) broadcastSnapshot(roomID string) {
 	s.broadcastRoom(roomID, value)
 }
 
-func memberID(member *Member, admission *Admission) string {
-	if member != nil {
-		return member.ID
-	}
-	return admission.MemberID
-}
 func randomID(bytes int) string {
 	value := make([]byte, bytes)
 	if _, err := rand.Read(value); err != nil {

@@ -93,7 +93,7 @@ func (s *Server) adminOverview(w http.ResponseWriter, _ *http.Request) {
 		Totals: adminTotals{
 			Rooms:             len(s.rooms),
 			Members:           len(s.members),
-			PendingAdmissions: len(s.admissions),
+			PendingAdmissions: 0,
 		},
 		Rooms: make([]adminRoom, 0, len(s.rooms)),
 		Now:   now,
@@ -131,11 +131,6 @@ func (s *Server) adminOverview(w http.ResponseWriter, _ *http.Request) {
 				IsHost:            member.ID == room.HostMemberID,
 				ReconnectDeadline: timePointer(member.ReconnectDeadline),
 			})
-		}
-		for _, admission := range s.admissions {
-			if admission.RoomID == room.ID {
-				item.PendingAdmissions++
-			}
 		}
 		sort.Slice(item.Members, func(i, j int) bool {
 			if item.Members[i].IsHost != item.Members[j].IsHost {

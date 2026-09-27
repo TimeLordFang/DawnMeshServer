@@ -8,7 +8,7 @@ export async function setupRoom(page: Page, options: SetupRoomOptions = {}) {
     const summary = { id: 'room-one', name: '山海骑行小队', hostNickname: '林间', memberCount: 3, maxParticipants: 25, isHost, adminListening: false };
     const grant = { room: summary, memberId: 'me', resumeToken: 'test-session', eventsUrl: '/api/v1/events', livekitUrl: 'wss://test.invalid', livekitToken: 'test' };
     let result: unknown = {};
-    if (path.endsWith('/info')) result = { protocolVersion: 1, instanceId: 'test', name: '曙光之声', maxRoomParticipants: 25, adminListeningSupported: true };
+    if (path.endsWith('/info')) result = { protocolVersion: 2, instanceId: 'test', name: '曙光之声', maxRoomParticipants: 25, adminListeningSupported: true };
     if (path.endsWith('/rooms')) result = route.request().method() === 'POST' ? grant : { rooms: [summary] };
     if (path.endsWith('/media-grant')) result = grant;
     if (path.endsWith('/overview')) result = {
@@ -42,6 +42,7 @@ export async function setupRoom(page: Page, options: SetupRoomOptions = {}) {
         stop() { this.mediaStreamTrack.stop(); }
       }
       export class Room {
+        remoteParticipants = new Map([['river', {identity: 'river'}], ['mountain', {identity: 'mountain'}]]);
         state = 'disconnected'; canPlaybackAudio = false; handlers = {};
         constructor(options) {
           window.__room = this;

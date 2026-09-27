@@ -113,3 +113,34 @@ func TestPresenceDisconnectAndExplicitLeaveHaveDistinctEvents(t *testing.T) {
 		t.Fatal("explicitly departed identity retained")
 	}
 }
+
+func TestOldDisconnectCannotOverwriteReplacementStream(t *testing.T) {
+	s := testServer(t)
+	room := &Room{ID: "replacement", HostMemberID: "host", CreatedAt: time.Now(), HostDisconnectTimeoutMinutes: 30}
+	member := &Member{ID: "host", RoomID: room.ID, IsHost: true, ResumeTokenHash: tokenHash("resume")}
+	s.rooms[room.ID] = room
+	s.members[member.ID] = member
+	if err := s.store.saveRoom(context.Background(), room); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.store.saveMember(context.Background(), member); err != nil {
+		t.Fatal(err)
+	}
+	stream := make(eventStream, 8)
+	s.addEventStream(member.ID, stream)
+	s.markConnected(member.ID, true)
+	s.markConnected(member.ID, false)
+	if !member.Connected || !member.ReconnectDeadline.IsZero() || !room.HostReconnectDeadline.IsZero() {
+		t.Fatal("old disconnect overwrote current stream")
+	}
+	s.removeEventStream(member.ID, stream)
+	s.markConnected(member.ID, false)
+	if member.Connected || member.ReconnectDeadline.IsZero() {
+		t.Fatal("last stream disconnect not recorded")
+	}
+	s.addEventStream(member.ID, stream)
+	s.markConnected(member.ID, true)
+	if !member.Connected || !member.ReconnectDeadline.IsZero() {
+		t.Fatal("restored stream remains offline")
+	}
+}

@@ -3,6 +3,9 @@ package server
 import "time"
 
 type Room struct {
+	JoinSalt                     []byte    `json:"-"`
+	JoinCredentialHash           []byte    `json:"-"`
+	WrappedRoomKey               []byte    `json:"-"`
 	PresenceAnnouncementsEnabled bool      `json:"presenceAnnouncementsEnabled"`
 	ID                           string    `json:"id"`
 	Name                         string    `json:"name"`
@@ -27,15 +30,4 @@ type Member struct {
 	Connected         bool      `json:"connected"`
 	ReconnectDeadline time.Time `json:"-"`
 	IsHost            bool      `json:"isHost"`
-}
-
-type Admission struct {
-	ID              string
-	RoomID          string
-	MemberID        string
-	Nickname        string
-	DeviceID        string
-	ResumeToken     string
-	ResumeTokenHash []byte
-	CreatedAt       time.Time
 }

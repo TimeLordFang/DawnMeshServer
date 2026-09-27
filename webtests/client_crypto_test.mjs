@@ -26,11 +26,6 @@ if (toHex(clientKeys.sharedKey) !== "0e0672dc86f8e45565d338b0540abe69") throw ne
 if (toHex(clientKeys.confirmA) !== "58ad4aa88e0b60d5061eb6b5dd93e80d9c4f00d127c65b3b35b1b5281fee38f0") throw new Error("SPAKE2 client confirmation mismatch");
 if (toHex(hostKeys.confirmB) !== "d3e2e547f1ae04f2dbdbf0fc4b79f8ecff2dff314b5d32fe9fcef2fb26dc459b") throw new Error("SPAKE2 host confirmation mismatch");
 
-const inviteScalar = await deriveInviteScalar("012345");
-if (inviteScalar !== BigInt("0x933ac63964a94dea77a765e8e855a4e1829738cb0842f10dc0098a4af0bb4cfdc4fa8ed848c662dd")) {
-  throw new Error("scrypt invite derivation mismatch");
-}
-
 const chatRoomKey = Uint8Array.from({ length: 32 }, (_, index) => index);
 const chatKey = await dawnHkdf(chatRoomKey, "DawnMesh internet chat v1");
 if (toHex(chatKey) !== "2da8c6292bcc34738e20f2ba72dfb573f135e1911187e0de19152e6d89dda59b") {
@@ -50,10 +45,17 @@ console.log("DawnMesh browser cryptography vectors passed");
 
 const fourDigits = await deriveInviteScalar("0012");
 if (fourDigits !== await deriveInviteScalar("0012")) throw new Error("4-digit derivation is unstable");
-if (fourDigits === await deriveInviteScalar("000012")) throw new Error("legacy PIN was padded or truncated");
-for (const invalid of ["123", "12345", "1234567", "12a4"]) {
+for (const invalid of ["123", "12345", "000012", "1234567", "12a4"]) {
   let rejected = false;
   try { await deriveInviteScalar(invalid); } catch { rejected = true; }
   if (!rejected) throw new Error(`invalid invite accepted: ${invalid}`);
 }
-console.log("Four-digit and legacy six-digit invitations passed");
+console.log("Four-digit invitations passed");
+
+const salt = hexBytes('000102030405060708090a0b0c0d0e0f');
+const credentials = await DawnCrypto.internetInviteCredentials('0012', salt);
+if (credentials.credential !== 'dpGI1xd+eY4DMeu2MRF1VivNsVsVwhXMJQxoyrs0aCw=') throw new Error('server admission scrypt mismatch');
+if (toHex(credentials.wrappingKey) !== 'ccf348a96242d216f18b5020a342fce88fc22179238a5fa08580109bf764b926') throw new Error('wrapping key mismatch');
+const wrapped = await aesEncrypt(credentials.wrappingKey, chatRoomKey, credentials.aad, hexBytes('000102030405060708090a0b'));
+if (DawnCrypto.base64(wrapped) !== 'AAECAwQFBgcICQoLBuxi2D+luelGNFq4Rvwi40Fl2l8Yoc0GkL1gTKUys5DFJ4DKUI5Pe7jqLKyACMq8') throw new Error('room key wrapping mismatch');
+console.log('Server admission credentials and Dart room-key envelope passed');
