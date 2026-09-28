@@ -17,7 +17,7 @@ RUN CGO_ENABLED=0 GOOS="${TARGETOS}" GOARCH="${TARGETARCH}" \
     go build -trimpath -ldflags="-s -w" -o /out/dawnmesh-server ./cmd/dawnmesh-server && \
     mkdir -p /out/data
 
-FROM alpine:3.24.1
+FROM alpine:3.24.2
 COPY --from=build /out/dawnmesh-server /usr/local/bin/dawnmesh-server
 COPY --from=build --chown=65532:65532 /out/data /data
 LABEL org.opencontainers.image.title="DawnMesh Server" \
