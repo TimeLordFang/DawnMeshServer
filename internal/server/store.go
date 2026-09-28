@@ -196,6 +196,9 @@ func (s *store) load(ctx context.Context) (map[string]*Room, map[string]*Member,
 		}
 		member.ReconnectDeadline = timestamp(deadline)
 		member.IsHost = rooms[member.RoomID] != nil && rooms[member.RoomID].HostMemberID == member.ID
+		if member.IsHost {
+			member.CanSpeak = true
+		}
 		members[member.ID] = member
 	}
 	return rooms, members, rows.Err()

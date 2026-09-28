@@ -211,7 +211,7 @@ func (s *Server) adminVoicePolicy(w http.ResponseWriter, r *http.Request) {
 
 	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
 	defer cancel()
-	if err := s.livekit.setCanPublish(ctx, roomID, targetID, body.CanSpeak); err != nil {
+	if err := s.syncMediaPolicy(ctx, targetID); err != nil {
 		// The persisted policy is authoritative and will be applied again when
 		// the participant reconnects or reports media readiness.
 		writeJSON(w, http.StatusAccepted, map[string]any{"ok": true, "mediaUpdatePending": true})

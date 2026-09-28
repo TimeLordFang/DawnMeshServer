@@ -8,7 +8,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
@@ -27,19 +26,20 @@ import (
 const reconnectRetention = 30 * time.Minute
 
 type Server struct {
-	cfg          config.Config
-	startedAt    time.Time
-	store        *store
-	livekit      *liveKitManager
-	mu           sync.Mutex
-	wsWriteMu    sync.Mutex
-	rooms        map[string]*Room
-	members      map[string]*Member
-	sockets      map[string]map[*websocket.Conn]struct{}
-	eventStreams map[string]map[eventStream]struct{}
-	attempts     map[string][]time.Time
-	monitors     map[string]*monitorSession
-	stop         chan struct{}
+	cfg              config.Config
+	startedAt        time.Time
+	store            *store
+	livekit          *liveKitManager
+	mu               sync.Mutex
+	mediaPolicyLocks [64]sync.Mutex
+	wsWriteMu        sync.Mutex
+	rooms            map[string]*Room
+	members          map[string]*Member
+	sockets          map[string]map[*websocket.Conn]struct{}
+	eventStreams     map[string]map[eventStream]struct{}
+	attempts         map[string][]time.Time
+	monitors         map[string]*monitorSession
+	stop             chan struct{}
 }
 
 func New(cfg config.Config) (*Server, error) {
@@ -453,7 +453,7 @@ func (s *Server) voicePolicy(w http.ResponseWriter, r *http.Request, caller *Mem
 	targetID := r.PathValue("member")
 	s.mu.Lock()
 	target := s.members[targetID]
-	if target == nil || target.RoomID != caller.RoomID || target.IsHost {
+	if s.rooms[caller.RoomID] == nil || s.rooms[caller.RoomID].HostMemberID != caller.ID || target == nil || target.RoomID != caller.RoomID || s.rooms[caller.RoomID].HostMemberID == target.ID {
 		s.mu.Unlock()
 		writeError(w, http.StatusBadRequest, "目标成员无效")
 		return
@@ -464,7 +464,7 @@ func (s *Server) voicePolicy(w http.ResponseWriter, r *http.Request, caller *Mem
 	s.mu.Unlock()
 	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
 	defer cancel()
-	if err := s.livekit.setCanPublish(ctx, caller.RoomID, targetID, body.CanSpeak); err != nil {
+	if err := s.syncMediaPolicy(ctx, targetID); err != nil {
 		slog.Warn("livekit permission update failed", "error", err, "member", targetID)
 	}
 	s.broadcastRoom(caller.RoomID, map[string]any{"type": "voice_policy", "memberId": targetID, "canSpeak": body.CanSpeak, "members": members})
@@ -485,13 +485,15 @@ func (s *Server) handover(w http.ResponseWriter, r *http.Request, caller *Member
 	s.mu.Lock()
 	target := s.members[body.MemberID]
 	room := s.rooms[caller.RoomID]
-	if target == nil || target.RoomID != caller.RoomID || !target.Connected {
+	if room == nil || room.HostMemberID != caller.ID || target == nil || target.ID == caller.ID || target.RoomID != caller.RoomID || !target.Connected {
 		s.mu.Unlock()
 		writeError(w, http.StatusBadRequest, "只能移交给在线成员")
 		return
 	}
 	caller.IsHost = false
 	target.IsHost = true
+	target.CanSpeak = true
+	_ = s.store.saveMember(r.Context(), target)
 	room.HostMemberID = target.ID
 	room.HostNickname = target.Nickname
 	room.HostReconnectDeadline = time.Time{}
@@ -622,24 +624,12 @@ func (s *Server) routeEvent(ctx context.Context, member *Member, event map[strin
 			return errors.New("member required")
 		}
 		s.mu.Lock()
-		canSpeak := member.CanSpeak
-		roomID := member.RoomID
+		allowed := s.allowAttemptLocked("media-ready:"+member.ID, 30, time.Minute)
 		s.mu.Unlock()
-		var updateErr error
-		for attempt := 0; attempt < 3; attempt++ {
-			updateCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
-			updateErr = s.livekit.setCanPublish(updateCtx, roomID, member.ID, canSpeak)
-			cancel()
-			if updateErr == nil {
-				return nil
-			}
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			case <-time.After(250 * time.Millisecond):
-			}
+		if !allowed {
+			return errors.New("media permission sync rate limited")
 		}
-		return fmt.Errorf("media permission: %w", updateErr)
+		return s.syncMediaPolicy(ctx, member.ID)
 	}
 	return errors.New("unsupported event")
 }
@@ -823,6 +813,8 @@ func (s *Server) assignHostLocked(room *Room) {
 	}
 	next := candidates[0]
 	next.IsHost = true
+	next.CanSpeak = true
+	_ = s.store.saveMember(context.Background(), next)
 	room.HostMemberID = next.ID
 	room.HostNickname = next.Nickname
 	room.HostReconnectDeadline = time.Time{}

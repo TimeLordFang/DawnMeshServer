@@ -417,7 +417,7 @@ async function enterRoom({ grant, roomKey, inviteCode, chatCipher = null }: Ente
     summary: grant.room,
     members: [],
     isHost: Boolean(grant.room?.isHost),
-    canSpeak: true,
+    canSpeak: false, policyCanSpeak: true, mediaCanPublish: false,
     muted: false,
     voiceMode: "ptt",
     ptt: false,
@@ -501,7 +501,7 @@ async function connectEvents() {
   });
   if (state.active !== active || active.leaving) return;
   if (active.room?.state === "connected") {
-    sendEvent({ type: "media_ready", memberId: active.memberId });
+    requestMediaPermission(active, true);
   }
   updateConnectionStatus(active);
 }
@@ -513,8 +513,9 @@ async function handleManagementEvent(event: ManagementEvent) {
     const becameHost = !active.isHost && event.hostMemberId === active.memberId;
     active.summary = event.room || active.summary;
     active.isHost = event.hostMemberId === active.memberId;
-    active.canSpeak = event.canSpeak ?? active.canSpeak;
+    active.policyCanSpeak = event.canSpeak ?? active.policyCanSpeak;
     active.members = event.members || active.members;
+    applyRosterSpeakingPolicy(active);
     if (becameHost) revealInvite();
     if (!active.isHost) hideInvite(true);
     await applyMicrophone(currentMicWanted());
@@ -526,16 +527,19 @@ async function handleManagementEvent(event: ManagementEvent) {
     memberLeft(active, event.memberId, event.nickname || '成员', event.eventId || '');
   } else if (event.type === "voice_policy") {
     if (event.memberId === active.memberId) {
-      active.canSpeak = Boolean(event.canSpeak);
+      active.policyCanSpeak = Boolean(event.canSpeak);
+      updateSpeakingPermission(active);
       if (!active.canSpeak) stopPTT(active);
       await applyMicrophone(currentMicWanted());
     }
     active.members = event.members || active.members;
+    applyRosterSpeakingPolicy(active);
     renderRoom();
   } else if (event.type === "role_changed") {
     const becameHost = !active.isHost && event.hostMemberId === active.memberId;
     active.isHost = event.hostMemberId === active.memberId;
     active.members = event.members || active.members;
+    applyRosterSpeakingPolicy(active);
     if (becameHost) revealInvite(); else hideInvite(true);
     renderRoom();
   } else if (event.type === "room_ended") {
@@ -550,6 +554,28 @@ function sendEvent(value: Partial<ManagementEvent>) {
   const socket = state.active?.socket;
   if (socket?.readyState !== WebSocket.OPEN) throw new RequestError("管理通道暂不可用");
   socket.send(JSON.stringify(value));
+}
+
+function updateSpeakingPermission(active: ActiveRoom) {
+  active.canSpeak = (active.isHost || active.policyCanSpeak) && active.mediaCanPublish;
+  if (!active.canSpeak) stopPTT(active);
+  requestMediaPermission(active);
+}
+function applyRosterSpeakingPolicy(active: ActiveRoom) {
+  const self = active.members.find(m => m.id === active.memberId);
+  if (self) active.policyCanSpeak = self.canSpeak;
+  updateSpeakingPermission(active);
+  void applyMicrophone(currentMicWanted());
+}
+function requestMediaPermission(active: ActiveRoom, force = false) {
+  window.clearTimeout(active.mediaPermissionTimer);
+  active.mediaPermissionTimer = undefined;
+  if (state.active !== active || active.leaving || active.roomEnded || active.room?.state !== 'connected' || active.socket?.readyState !== WebSocket.OPEN) return;
+  const mismatch = active.mediaCanPublish !== (active.isHost || active.policyCanSpeak);
+  if (!force && !mismatch) return;
+  try { sendEvent({type:'media_ready',memberId:active.memberId}); }
+  catch { /* A replacement management channel retries on connect. */ }
+  if (mismatch) active.mediaPermissionTimer = window.setTimeout(() => requestMediaPermission(active), 10000);
 }
 
 function audioBitrate() {
@@ -791,7 +817,8 @@ async function connectMedia(grant: Grant) {
   room.on(LivekitClient.RoomEvent.ParticipantPermissionsChanged, async (_, participant) => {
     if (state.active !== active || active.room !== room || active.leaving) return;
     if (participant?.identity !== active.memberId) return;
-    active.canSpeak = room.localParticipant.permissions?.canPublish ?? active.canSpeak;
+    active.mediaCanPublish = room.localParticipant.permissions?.canPublish ?? false;
+    updateSpeakingPermission(active);
     if (!active.canSpeak) stopPTT(active);
     await applyMicrophone(currentMicWanted());
     renderTalkState();
@@ -834,7 +861,7 @@ async function connectMedia(grant: Grant) {
     setRoomStatus("reconnecting", "媒体连接波动，正在恢复");
     renderTalkState();
   });
-  room.on(LivekitClient.RoomEvent.Reconnected, () => { resetPresence(active); renderMembers(); updateConnectionStatus(active); void applyMicrophone(currentMicWanted()); });
+  room.on(LivekitClient.RoomEvent.Reconnected, () => { resetPresence(active); renderMembers(); active.mediaCanPublish = room.localParticipant.permissions?.canPublish ?? false; updateSpeakingPermission(active); requestMediaPermission(active, true); updateConnectionStatus(active); void applyMicrophone(currentMicWanted()); });
   room.on(LivekitClient.RoomEvent.Disconnected, (reason) => {
     if (active.intentionalMediaDisconnects?.has(room)) return;
     if (state.active === active && !active.leaving) {
@@ -864,7 +891,9 @@ async function connectMedia(grant: Grant) {
     await room.disconnect(); worker.terminate(); return;
   }
   active.mediaDiagnostic = active.audioReady ? "媒体连接成功" : "媒体已连接，可直接启用收听";
-  if (active.socket?.readyState === WebSocket.OPEN) sendEvent({ type: "media_ready", memberId: active.memberId });
+  active.mediaCanPublish = room.localParticipant.permissions?.canPublish ?? false;
+  updateSpeakingPermission(active);
+  requestMediaPermission(active, true);
   await refreshAudioDevices().catch(() => {});
   if (active.audioReady) {
     await resumeRemoteAudio(true);
@@ -1139,8 +1168,9 @@ function renderTalkState() {
     $("#talk-label").textContent = "麦克风不可用";
     $("#talk-hint").textContent = "点击重试，仍可收听房间语音";
   } else if (!active.canSpeak) {
-    $("#talk-label").textContent = "已被房主封麦";
-    $("#talk-hint").textContent = "等待房主恢复发言";
+    const mutedByHost = !active.isHost && !active.policyCanSpeak;
+    $("#talk-label").textContent = mutedByHost ? "已被房主封麦" : "正在恢复发言权限";
+    $("#talk-hint").textContent = mutedByHost ? "等待房主恢复发言" : "连接恢复后会自动重试";
   } else if (!active.audioReady) {
     $("#talk-label").textContent = "启用麦克风后通话";
     $("#talk-hint").textContent = "按住按钮或空格键开始授权";
@@ -1298,6 +1328,7 @@ async function cleanupRoom() {
   const active = state.active!;
   if (!active) return;
   active.leaving = true;
+  window.clearTimeout(active.mediaPermissionTimer);
   resetPresence(active);
   disposeMicrophone(active);
   window.clearTimeout(active.inviteTimer);
@@ -1324,6 +1355,7 @@ async function handleRoomEnded(active: ActiveRoom) {
   resetPresence(active);
   active.roomEnded = true;
   active.leaving = true;
+  window.clearTimeout(active.mediaPermissionTimer);
   stopPTT(active);
   disposeMicrophone(active);
   active.audioInitializing = false;

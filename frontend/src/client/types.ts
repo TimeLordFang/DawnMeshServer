@@ -16,6 +16,7 @@ export interface EventChannel {
 export interface ChatMessage { id: string; senderId: string; senderName: string; text: string; sentAt: number; mine: boolean }
 export interface ActiveRoom extends EnterRoom {
   memberId: string; resumeToken: string; summary: RoomSummary; members: Member[];
+  policyCanSpeak: boolean; mediaCanPublish: boolean; mediaPermissionTimer?: number;
   isHost: boolean; canSpeak: boolean; muted: boolean; voiceMode: 'ptt' | 'auto'; ptt: boolean;
   audioProfile: string; speaking: Set<string>; messages: ChatMessage[];
   chatCipher: ChatCipher;
