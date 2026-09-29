@@ -35,9 +35,13 @@ const state: ClientState = {
 };
 
 if (!state.deviceId || state.deviceId.length < 24) {
-  state.deviceId = DawnCrypto.base64Url(crypto.getRandomValues(new Uint8Array(24)));
+  state.deviceId = crypto.randomUUID();
   localStorage.setItem(storage.device, state.deviceId);
 }
+
+const proofStorage = "dawnmesh-client-device-proof";
+const deviceProof = localStorage.getItem(proofStorage) || DawnCrypto.base64(crypto.getRandomValues(new Uint8Array(32)));
+localStorage.setItem(proofStorage, deviceProof);
 
 function show(view: HTMLElement) {
   for (const element of [$("#setup-view"), $("#lobby-view"), $("#room-view")]) element.hidden = element !== view;
@@ -373,11 +377,11 @@ async function createRoom() {
     const wrappedRoomKey = DawnCrypto.base64(await DawnCrypto.aesEncrypt(keys.wrappingKey, roomKey, keys.aad));
     const chatCipher = await operation("聊天密钥初始化", () => DawnCrypto.ChatCipher.create(roomKey));
     setBusy(button, true, "正在创建…");
-    const body: { name: string; nickname: string; deviceId: string; maxParticipants: number; hostDisconnectTimeoutMinutes: number; monitoringKey?: string; joinSalt: string; joinCredential: string; wrappedRoomKey: string } = {
+    const body: { name: string; nickname: string; deviceId: string; deviceProof: string; maxParticipants: number; hostDisconnectTimeoutMinutes: number; monitoringKey?: string; joinSalt: string; joinCredential: string; wrappedRoomKey: string } = {
       joinSalt: DawnCrypto.base64(salt), joinCredential: keys.credential, wrappedRoomKey,
       name: $("#room-name-input").value.trim(),
       nickname: state.nickname,
-      deviceId: state.deviceId,
+      deviceId: state.deviceId, deviceProof,
       maxParticipants: Number($("#max-participants-input").value),
       hostDisconnectTimeoutMinutes: Number($("#host-timeout-input").value),
     };
@@ -398,7 +402,7 @@ async function completeAdmission(roomId: string, inviteCode: string): Promise<En
   if (!room?.joinSalt) throw new RequestError('请升级服务端并重新创建房间');
   const keys = await operation('邀请码密钥派生', () => DawnCrypto.internetInviteCredentials(inviteCode.trim(), DawnCrypto.fromBase64(room.joinSalt!)));
   const grant = await api<Grant & {wrappedRoomKey: string}>(`/api/v1/rooms/${encodeURIComponent(roomId)}/join`, {
-    method: 'POST', body: JSON.stringify({nickname: state.nickname, deviceId: state.deviceId, joinCredential: keys.credential}),
+    method: 'POST', body: JSON.stringify({nickname: state.nickname, deviceId: state.deviceId, deviceProof, joinCredential: keys.credential}),
   });
   const roomKey = await DawnCrypto.aesDecrypt(keys.wrappingKey, DawnCrypto.fromBase64(grant.wrappedRoomKey), keys.aad);
   if (roomKey.length !== 32) throw new RequestError('房间密钥无效');
@@ -542,6 +546,9 @@ async function handleManagementEvent(event: ManagementEvent) {
     applyRosterSpeakingPolicy(active);
     if (becameHost) revealInvite(); else hideInvite(true);
     renderRoom();
+  } else if (event.type === "session_replaced") {
+    await handleRoomEnded(active);
+    toast("此设备已在另一个会话重新加入，10 秒后返回房间列表", 10_000);
   } else if (event.type === "room_ended") {
     await handleRoomEnded(active);
   } else if (event.type === "error") {

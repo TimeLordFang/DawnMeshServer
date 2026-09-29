@@ -20,6 +20,7 @@ type Room struct {
 }
 
 type Member struct {
+	DeviceProofHash   []byte    `json:"-"`
 	ID                string    `json:"id"`
 	RoomID            string    `json:"-"`
 	Nickname          string    `json:"nickname"`

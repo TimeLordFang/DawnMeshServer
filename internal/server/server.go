@@ -90,7 +90,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"status": "ok"})
 	})
-	mux.HandleFunc("GET /api/v1/info", s.withAccess(s.info))
+	mux.HandleFunc("GET /api/v1/info", s.withAccess(s.featureInfo))
 	mux.HandleFunc("GET /api/v1/media-health", s.withAccess(s.mediaHealth))
 	mux.HandleFunc("GET /api/v1/rooms", s.withAccess(s.listRooms))
 	mux.HandleFunc("POST /api/v1/rooms", s.withAccess(s.createRoom))
@@ -192,7 +192,7 @@ func (s *Server) withSession(next func(http.ResponseWriter, *http.Request, *Memb
 }
 
 func (s *Server) info(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{"instanceId": s.cfg.InstanceID, "name": s.cfg.InstanceName, "protocolVersion": 2, "maxRoomParticipants": s.cfg.MaximumParticipants, "adminListeningSupported": s.cfg.AdminToken != ""})
+	writeJSON(w, http.StatusOK, map[string]any{"instanceId": s.cfg.InstanceID, "name": s.cfg.InstanceName, "protocolVersion": 2, "features": s.clientFeatures(), "maxRoomParticipants": s.cfg.MaximumParticipants, "adminListeningSupported": s.cfg.AdminToken != ""})
 }
 
 func (s *Server) mediaHealth(w http.ResponseWriter, r *http.Request) {
@@ -218,6 +218,7 @@ func (s *Server) listRooms(w http.ResponseWriter, _ *http.Request) {
 }
 
 type createRoomRequest struct {
+	DeviceProof     string `json:"deviceProof"`
 	JoinSalt        string `json:"joinSalt"`
 	JoinCredential  string `json:"joinCredential"`
 	WrappedRoomKey  string `json:"wrappedRoomKey"`
@@ -232,6 +233,10 @@ type createRoomRequest struct {
 func (s *Server) createRoom(w http.ResponseWriter, r *http.Request) {
 	var body createRoomRequest
 	if !decodeJSON(w, r, &body) {
+		return
+	}
+	if body.DeviceProof != "" && !validDeviceProof(body.DeviceProof) {
+		writeError(w, 400, "设备凭证无效")
 		return
 	}
 	body.Name = strings.TrimSpace(body.Name)
@@ -265,7 +270,7 @@ func (s *Server) createRoom(w http.ResponseWriter, r *http.Request) {
 	resume := randomID(32)
 	now := time.Now().UTC()
 	room := &Room{JoinSalt: salt, JoinCredentialHash: tokenHash(base64.StdEncoding.EncodeToString(credential)), WrappedRoomKey: wrapped, ID: roomID, Name: body.Name, HostMemberID: memberID, HostNickname: body.Nickname, MaxParticipants: body.MaxParticipants, HostDisconnectTimeoutMinutes: body.HostTimeout, CreatedAt: now, MonitoringKey: wrappedMonitoringKey}
-	member := &Member{ID: memberID, RoomID: roomID, Nickname: body.Nickname, DeviceID: body.DeviceID, ResumeTokenHash: tokenHash(resume), CanSpeak: true, JoinOrder: 1, IsHost: true}
+	member := &Member{DeviceProofHash: deviceProofHash(body.DeviceProof), ID: memberID, RoomID: roomID, Nickname: body.Nickname, DeviceID: body.DeviceID, ResumeTokenHash: tokenHash(resume), CanSpeak: true, JoinOrder: 1, IsHost: true}
 	s.mu.Lock()
 	if len(s.rooms) >= s.cfg.MaximumRooms || !s.allowAttemptLocked("create:ip:"+clientIP(r), 10, time.Minute) || !s.allowAttemptLocked("create:device:"+body.DeviceID, 3, time.Minute) {
 		s.mu.Unlock()
@@ -618,6 +623,12 @@ func keepEventSocketAlive(ctx context.Context, conn *websocket.Conn, socketID st
 }
 
 func (s *Server) routeEvent(ctx context.Context, member *Member, event map[string]any) error {
+	s.mu.Lock()
+	current := member != nil && s.members[member.ID] == member
+	s.mu.Unlock()
+	if !current {
+		return errors.New("session replaced")
+	}
 	typeName, _ := event["type"].(string)
 	if typeName == "media_ready" {
 		if member == nil {

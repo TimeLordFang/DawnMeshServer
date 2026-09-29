@@ -96,6 +96,9 @@ jobs:
             if [[ -f "${notes_file}" ]]; then
               notes_flags=(--notes-file "${notes_file}")
             fi
+            if [[ "${GITHUB_REF_NAME}" == *-* ]]; then
+              notes_flags+=(--prerelease)
+            fi
             gh release create "${GITHUB_REF_NAME}" dist/*.tar.gz dist/SHA256SUMS \
               --verify-tag "${notes_flags[@]}" \
               --title "DawnMesh Server ${GITHUB_REF_NAME}"

@@ -36,6 +36,9 @@ CREATE TABLE IF NOT EXISTS members (
  device_id TEXT NOT NULL, resume_token_hash BLOB NOT NULL, can_speak INTEGER NOT NULL, join_order INTEGER NOT NULL,
  reconnect_deadline INTEGER
 );
+CREATE TABLE IF NOT EXISTS member_device_proofs (
+ member_id TEXT PRIMARY KEY REFERENCES members(id) ON DELETE CASCADE, proof_hash BLOB NOT NULL
+);
 CREATE INDEX IF NOT EXISTS members_room_order ON members(room_id, join_order);
 CREATE TABLE IF NOT EXISTS room_join_credentials (
  room_id TEXT PRIMARY KEY REFERENCES rooms(id) ON DELETE CASCADE,
@@ -83,11 +86,24 @@ ON CONFLICT(room_id) DO UPDATE SET announcements_enabled=excluded.announcements_
 }
 
 func (s *store) saveMember(ctx context.Context, member *Member) error {
-	_, err := s.db.ExecContext(ctx, `INSERT INTO members VALUES(?,?,?,?,?,?,?,?)
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	_, err = tx.ExecContext(ctx, `INSERT INTO members VALUES(?,?,?,?,?,?,?,?)
 ON CONFLICT(id) DO UPDATE SET nickname=excluded.nickname,resume_token_hash=excluded.resume_token_hash,
 can_speak=excluded.can_speak,join_order=excluded.join_order,reconnect_deadline=excluded.reconnect_deadline`,
 		member.ID, member.RoomID, member.Nickname, member.DeviceID, member.ResumeTokenHash, member.CanSpeak, member.JoinOrder, millis(member.ReconnectDeadline))
-	return err
+	if err != nil {
+		return err
+	}
+	if len(member.DeviceProofHash) > 0 {
+		if _, err = tx.ExecContext(ctx, `INSERT INTO member_device_proofs VALUES(?,?) ON CONFLICT(member_id) DO UPDATE SET proof_hash=excluded.proof_hash`, member.ID, member.DeviceProofHash); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 func (s *store) saveMonitoringKey(ctx context.Context, roomID string, wrapped []byte) error {
@@ -183,7 +199,7 @@ func (s *store) load(ctx context.Context) (map[string]*Room, map[string]*Member,
 	if err := keyRows.Close(); err != nil {
 		return nil, nil, err
 	}
-	rows, err = s.db.QueryContext(ctx, `SELECT id,room_id,nickname,device_id,resume_token_hash,can_speak,join_order,reconnect_deadline FROM members`)
+	rows, err = s.db.QueryContext(ctx, `SELECT m.id,room_id,nickname,device_id,resume_token_hash,can_speak,join_order,reconnect_deadline,p.proof_hash FROM members m LEFT JOIN member_device_proofs p ON p.member_id=m.id`)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -191,7 +207,7 @@ func (s *store) load(ctx context.Context) (map[string]*Room, map[string]*Member,
 	for rows.Next() {
 		member := &Member{}
 		var deadline sql.NullInt64
-		if err := rows.Scan(&member.ID, &member.RoomID, &member.Nickname, &member.DeviceID, &member.ResumeTokenHash, &member.CanSpeak, &member.JoinOrder, &deadline); err != nil {
+		if err := rows.Scan(&member.ID, &member.RoomID, &member.Nickname, &member.DeviceID, &member.ResumeTokenHash, &member.CanSpeak, &member.JoinOrder, &deadline, &member.DeviceProofHash); err != nil {
 			return nil, nil, err
 		}
 		member.ReconnectDeadline = timestamp(deadline)

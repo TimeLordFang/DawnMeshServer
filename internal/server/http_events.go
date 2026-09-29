@@ -66,6 +66,12 @@ func (s *Server) eventHTTPStream(w http.ResponseWriter, r *http.Request) {
 			}
 			flusher.Flush()
 		case <-heartbeat.C:
+			s.mu.Lock()
+			current := s.members[member.ID] == member
+			s.mu.Unlock()
+			if !current {
+				return
+			}
 			if _, err := w.Write([]byte("\n")); err != nil {
 				return
 			}

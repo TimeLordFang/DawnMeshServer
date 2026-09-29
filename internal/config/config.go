@@ -9,6 +9,7 @@ import (
 )
 
 type Config struct {
+	ClientFeaturesPath  string
 	ListenAddress       string
 	DatabasePath        string
 	InstanceID          string
@@ -34,6 +35,7 @@ func Load() (Config, error) {
 		return Config{}, errors.New("DAWNMESH_MAX_ROOMS must be between 1 and 100000")
 	}
 	cfg := Config{
+		ClientFeaturesPath:  strings.TrimSpace(os.Getenv("DAWNMESH_CLIENT_FEATURES_FILE")),
 		ListenAddress:       value("DAWNMESH_LISTEN", ":8080"),
 		DatabasePath:        value("DAWNMESH_DATABASE", "/data/dawnmesh.db"),
 		InstanceID:          strings.TrimSpace(os.Getenv("DAWNMESH_INSTANCE_ID")),
