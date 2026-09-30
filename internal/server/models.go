@@ -3,6 +3,7 @@ package server
 import "time"
 
 type Room struct {
+	HybridAudioEnabled           bool      `json:"hybridAudioEnabled"`
 	JoinSalt                     []byte    `json:"-"`
 	JoinCredentialHash           []byte    `json:"-"`
 	WrappedRoomKey               []byte    `json:"-"`

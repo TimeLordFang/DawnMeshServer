@@ -101,6 +101,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("PUT /api/v1/rooms/{room}/members/{member}/voice-policy", s.withSession(s.voicePolicy))
 	mux.HandleFunc("POST /api/v1/rooms/{room}/handover", s.withSession(s.handover))
 	mux.HandleFunc("DELETE /api/v1/rooms/{room}/members/{member}", s.withSession(s.leaveMember))
+	mux.HandleFunc("PUT /api/v1/rooms/{room}/hybrid-audio", s.withSession(s.setHybridAudio))
 	mux.HandleFunc("PUT /api/v1/rooms/{room}/presence-announcements", s.withSession(s.setPresenceAnnouncements))
 	mux.HandleFunc("DELETE /api/v1/rooms/{room}", s.withSession(s.endRoom))
 	mux.HandleFunc("GET /api/v1/events", s.withEventAccess(s.events))
@@ -418,6 +419,42 @@ func (s *Server) setPresenceAnnouncements(w http.ResponseWriter, r *http.Request
 	writeJSON(w, http.StatusOK, payload)
 }
 
+func (s *Server) setHybridAudio(w http.ResponseWriter, r *http.Request, caller *Member) {
+	var body struct {
+		Enabled *bool `json:"enabled"`
+	}
+	if !decodeJSON(w, r, &body) {
+		return
+	}
+	if body.Enabled == nil {
+		writeError(w, http.StatusBadRequest, "缺少双线融合开关")
+		return
+	}
+	if *body.Enabled && !s.clientFeatures().HybridAudio {
+		writeError(w, http.StatusConflict, "服务端已关闭双线融合")
+		return
+	}
+	s.mu.Lock()
+	room := s.rooms[r.PathValue("room")]
+	// Check the current host while holding the lock, including handover races.
+	if room == nil || caller.RoomID != room.ID || room.HostMemberID != caller.ID || s.members[caller.ID] != caller {
+		s.mu.Unlock()
+		writeError(w, http.StatusForbidden, "只有当前房主可以修改双线融合")
+		return
+	}
+	if err := s.store.saveHybridAudio(r.Context(), room.ID, *body.Enabled); err != nil {
+		s.mu.Unlock()
+		writeError(w, http.StatusInternalServerError, "无法保存双线融合设置")
+		return
+	}
+	room.HybridAudioEnabled = *body.Enabled
+	payload := map[string]any{"type": "room_updated", "room": s.roomJSON(room)}
+	roomID := room.ID
+	s.mu.Unlock()
+	s.broadcastRoom(roomID, payload)
+	writeJSON(w, http.StatusOK, payload)
+}
+
 func (s *Server) renameRoom(w http.ResponseWriter, r *http.Request, caller *Member) {
 	if caller.RoomID != r.PathValue("room") || !caller.IsHost {
 		writeError(w, http.StatusForbidden, "只有房主可以改名")
@@ -656,7 +693,7 @@ func (s *Server) connectionGrant(room *Room, member *Member, resume string) (map
 }
 
 func (s *Server) roomJSON(room *Room) map[string]any {
-	return map[string]any{"joinSalt": base64.StdEncoding.EncodeToString(room.JoinSalt), "id": room.ID, "name": room.Name, "memberCount": s.memberCount(room.ID), "maxParticipants": room.MaxParticipants, "hostNickname": room.HostNickname, "hostDisconnectTimeoutMinutes": room.HostDisconnectTimeoutMinutes, "presenceAnnouncementsSupported": true, "presenceAnnouncementsEnabled": room.PresenceAnnouncementsEnabled, "adminListeningAvailable": len(room.MonitoringKey) > 0, "adminListening": s.monitorCountLocked(room.ID) > 0}
+	return map[string]any{"joinSalt": base64.StdEncoding.EncodeToString(room.JoinSalt), "id": room.ID, "name": room.Name, "memberCount": s.memberCount(room.ID), "maxParticipants": room.MaxParticipants, "hostNickname": room.HostNickname, "hostDisconnectTimeoutMinutes": room.HostDisconnectTimeoutMinutes, "hybridAudioSupported": true, "hybridAudioEnabled": room.HybridAudioEnabled, "presenceAnnouncementsSupported": true, "presenceAnnouncementsEnabled": room.PresenceAnnouncementsEnabled, "adminListeningAvailable": len(room.MonitoringKey) > 0, "adminListening": s.monitorCountLocked(room.ID) > 0}
 }
 func (s *Server) memberCount(roomID string) int {
 	count := 0

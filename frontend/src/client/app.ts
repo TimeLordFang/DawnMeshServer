@@ -548,7 +548,7 @@ async function handleManagementEvent(event: ManagementEvent) {
     renderRoom();
   } else if (event.type === "session_replaced") {
     await handleRoomEnded(active);
-    toast("此设备已在另一个会话重新加入，10 秒后返回房间列表", 10_000);
+    toast("此设备已在另一个会话重新加入，当前通话已结束", 10_000);
   } else if (event.type === "room_ended") {
     await handleRoomEnded(active);
   } else if (event.type === "error") {
@@ -1167,7 +1167,7 @@ function renderTalkState() {
   button.disabled = !active.canSpeak || active.roomEnded;
   if (active.roomEnded) {
     $("#talk-label").textContent = "房间已解散";
-    $("#talk-hint").textContent = "10 秒后返回房间列表";
+    $("#talk-hint").textContent = "消息保留到退出房间";
   } else if (active.audioInitializing) {
     $("#talk-label").textContent = "等待麦克风授权";
     $("#talk-hint").textContent = "请在浏览器提示中允许麦克风";
@@ -1194,7 +1194,7 @@ function renderTalkState() {
   const notices = [];
   if (active.microphoneError) notices.push(active.microphoneError);
   if (active.summary.adminListening) notices.push("服务器管理员正在实时收听此房间");
-  if (active.roomEnded) notices.push("房间已被群主解散，10 秒后返回房间列表");
+  if (active.roomEnded) notices.push("房间已被群主解散，消息保留到退出房间");
   $("#call-notice").textContent = notices.join(" · ");
 }
 
@@ -1359,6 +1359,12 @@ async function cleanupRoom() {
 
 async function handleRoomEnded(active: ActiveRoom) {
   if (active.roomEnded || state.active !== active) return;
+  if (!active.messages.some(message => message.text.trim().length > 0)) {
+    await cleanupRoom();
+    await loadServer();
+    return;
+  }
+  await releaseWakeLock();
   resetPresence(active);
   active.roomEnded = true;
   active.leaving = true;
@@ -1387,16 +1393,10 @@ async function handleRoomEnded(active: ActiveRoom) {
   active.worker = null;
   $("#remote-audio").replaceChildren();
   setRoomStatus("failed", "房间已解散");
-  toast("房间已被群主解散，10 秒后返回房间列表", 10_000);
+  toast("房间已被群主解散，消息保留到退出房间", 10_000);
   renderRoom();
   void roomToDisconnect?.disconnect().catch(() => {});
-  active.roomEndedTimer = window.setTimeout(() => {
-    active.roomEndedTimer = undefined;
-    if (state.active !== active) return;
-    void cleanupRoom()
-      .then(() => loadServer())
-      .catch(cause => toast(errorText(cause)));
-  }, 10_000);
+
 }
 
 async function leaveRoom(endRoom = false) {

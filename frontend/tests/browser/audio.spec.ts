@@ -54,17 +54,23 @@ test('pressing again during the 500ms tail window cancels the pending microphone
   await expect.poll(() => page.evaluate(() => (window as any).__track.mediaStreamTrack.enabled)).toBe(false);
 });
 
-test('room dissolution notifies a member and returns to the lobby after ten seconds', async ({ page }) => {
+test('empty dissolved room returns to the lobby immediately', async ({ page }) => {
   const fixture = await enterRoom(page, { isHost: false });
   fixture.sendManagementEvent({ type: 'room_ended' });
-  await expect(page.locator('#toast')).toHaveText('房间已被群主解散，10 秒后返回房间列表');
-  await expect(page.locator('#call-notice')).toContainText('房间已被群主解散');
-  await expect(page.locator('#talk-label')).toHaveText('房间已解散');
-  await page.waitForTimeout(9000);
+  await expect(page.locator('#lobby-view')).toBeVisible({ timeout: 2000 });
+  await expect(page.locator('#room-view')).toBeHidden();
+});
+
+test('dissolved room with text stays available until exit', async ({ page }) => {
+  const fixture = await enterRoom(page, { isHost: false });
+  await page.locator('#chat-input').fill('需要保留的文本');
+  await page.locator('#chat-form button[type=submit]').click();
+  await expect(page.locator('#chat-list')).toContainText('需要保留的文本');
+  fixture.sendManagementEvent({ type: 'room_ended' });
+  await expect(page.locator('#toast')).toHaveText('房间已被群主解散，消息保留到退出房间');
+  await page.waitForTimeout(10500);
   await expect(page.locator('#room-view')).toBeVisible();
   await expect(page.locator('#lobby-view')).toBeHidden();
-  await expect(page.locator('#lobby-view')).toBeVisible({ timeout: 3000 });
-  await expect(page.locator('#room-view')).toBeHidden();
 });
 
 test('first press released before permission resolves stays silent and leaving stops capture', async ({ page }) => {

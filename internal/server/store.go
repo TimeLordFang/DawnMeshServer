@@ -44,6 +44,10 @@ CREATE TABLE IF NOT EXISTS room_join_credentials (
  room_id TEXT PRIMARY KEY REFERENCES rooms(id) ON DELETE CASCADE,
  salt BLOB NOT NULL, credential_hash BLOB NOT NULL, wrapped_key BLOB NOT NULL
 );
+CREATE TABLE IF NOT EXISTS room_hybrid_settings (
+ room_id TEXT PRIMARY KEY REFERENCES rooms(id) ON DELETE CASCADE,
+ enabled INTEGER NOT NULL DEFAULT 0
+);
 CREATE TABLE IF NOT EXISTS room_presence_settings (
  room_id TEXT PRIMARY KEY REFERENCES rooms(id) ON DELETE CASCADE,
  announcements_enabled INTEGER NOT NULL DEFAULT 0
@@ -76,6 +80,11 @@ max_participants=excluded.max_participants,host_timeout_minutes=excluded.host_ti
 host_reconnect_deadline=excluded.host_reconnect_deadline,empty_deadline=excluded.empty_deadline`,
 		room.ID, room.Name, room.HostMemberID, room.HostNickname, room.MaxParticipants,
 		room.HostDisconnectTimeoutMinutes, room.CreatedAt.UnixMilli(), millis(room.HostReconnectDeadline), millis(room.EmptyDeadline))
+	return err
+}
+
+func (s *store) saveHybridAudio(ctx context.Context, roomID string, enabled bool) error {
+	_, err := s.db.ExecContext(ctx, `INSERT INTO room_hybrid_settings(room_id,enabled) VALUES(?,?) ON CONFLICT(room_id) DO UPDATE SET enabled=excluded.enabled`, roomID, enabled)
 	return err
 }
 
@@ -157,6 +166,28 @@ func (s *store) load(ctx context.Context) (map[string]*Room, map[string]*Member,
 		return nil, nil, err
 	}
 	if err := joinRows.Close(); err != nil {
+		return nil, nil, err
+	}
+	hybridRows, err := s.db.QueryContext(ctx, `SELECT room_id,enabled FROM room_hybrid_settings`)
+	if err != nil {
+		return nil, nil, err
+	}
+	for hybridRows.Next() {
+		var id string
+		var enabled bool
+		if err := hybridRows.Scan(&id, &enabled); err != nil {
+			hybridRows.Close()
+			return nil, nil, err
+		}
+		if room := rooms[id]; room != nil {
+			room.HybridAudioEnabled = enabled
+		}
+	}
+	if err := hybridRows.Err(); err != nil {
+		hybridRows.Close()
+		return nil, nil, err
+	}
+	if err := hybridRows.Close(); err != nil {
 		return nil, nil, err
 	}
 	presenceRows, err := s.db.QueryContext(ctx, `SELECT room_id,announcements_enabled FROM room_presence_settings`)
