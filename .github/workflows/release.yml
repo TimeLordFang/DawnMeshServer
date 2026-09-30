@@ -41,6 +41,11 @@ jobs:
           npx playwright install --with-deps chromium
           npm run test:browser
 
+      - name: Verify module files
+        run: |
+          go mod tidy
+          git diff --exit-code -- go.mod go.sum
+
       - name: Test
         run: go test -race ./...
 
