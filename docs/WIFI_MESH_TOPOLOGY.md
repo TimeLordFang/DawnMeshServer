@@ -1,5 +1,7 @@
 # 多人 Wi-Fi Direct 与 Mesh（1.1.0-beta.4）
 
+> 历史方案（Server 0.3.0-beta.3 及更早）。从 beta.4 起，普通公网房只使用 LiveKit，`hybridAudio` 固定为 false，旧配置不能重新开启。新的独立融合房见 [融合房说明](FUSION_ROOMS.md)。
+
 ## 本版能做什么
 
 - 纯 Wi-Fi 房由成员连接房主，房主在应用层向其他已认证成员转发语音。已有真实回环 TCP 回归覆盖房主加两位成员的转发。

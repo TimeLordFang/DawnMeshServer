@@ -75,3 +75,18 @@ The embedded console is served from `GET /admin/`. Its static assets do not requ
 Admin APIs return `503` when `DAWNMESH_ADMIN_TOKEN` is unset. Invalid credentials are rate-limited per source address.
 
 `POST /api/v1/rooms` accepts the optional `monitoringKey` only when administrator access is configured. It must encode exactly 32 bytes with Base64URL. The key is wrapped with AES-256-GCM under a key derived from `DAWNMESH_ADMIN_TOKEN` before SQLite persistence. Omitting the field keeps administrator listening unavailable for that room.
+
+
+## 独立融合房（0.3.0-beta.4）
+
+`GET /api/v1/info` 额外声明 `fusionProtocolVersion: 1`。普通公网房的 `hybridAudioSupported`、`hybridAudioEnabled` 和 `features.hybridAudio` 均为 false；旧开启请求返回 409，关闭旧偏好仍可调用。
+
+融合房接口继承服务器 Bearer 访问控制，使用独立名字空间，不占用 LiveKit 房间。
+
+- `GET /api/v1/fusion/rooms`：返回 `{protocolVersion: 1, rooms: [...]}`，各房间包含 ID、名字、签名版本及成员 ID/房内身份摘要/昵称。只有仍有连接和新鲜签名状态的房间进入列表。
+- `PUT /api/v1/fusion/rooms/{room}`：JSON `manifest`、`state` 均为标准 Base64 编码；`X-Fusion-Key` 为通过加密入房通道取得的 32 字节随机能力密钥（Base64）。房间 ID 是 Ed25519 公钥的 Base64URL 无填充编码。重复上传同一快照幂等；旧版本、修改的签名或解散后重建被拒绝。
+- `GET /api/v1/fusion/rooms/{room}/relay`：WebSocket 二进制传递最大 518 字节的 DawnMesh 密封帧/PAKE 帧。已入房连接通过 `X-Fusion-Key` 验证；待入房连接在 20 秒内完成 PAKE 后发送文本 JSON `{key: "..."}` 升级。未验证连接限制发送速率及密封帧数量，不接受裸音频。
+
+manifest 二进制：版本 1（1 字节）、公钥（32）、能力密钥 SHA-256（32）、UTF-8 房间名（最多 64）、Ed25519 签名（64，签名前述内容）。state：大端 uint64 毫秒版本、解散标记（1）、人数（1）、每位成员的成员号（1）/身份摘要（16）/昵称字节长度（1）/UTF-8 昵称（最多 40），最后为 Ed25519 签名（签名输入为 `0x02 + 公钥 + state 正文`）。状态签名有效期为 90 秒，允许最多 60 秒的前向时钟偏差。房主每隔约 3 秒重新签名，网关仅转发，不持有签名私钥。
+
+服务端名单是本地房间的签名镜像；创建者仍负责入房。服务进程重启后在线成员会重新上传。详见 [房间行为和限制](FUSION_ROOMS.md)。

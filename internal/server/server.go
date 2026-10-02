@@ -26,6 +26,7 @@ import (
 const reconnectRetention = 30 * time.Minute
 
 type Server struct {
+	fusion           *fusionHub
 	cfg              config.Config
 	startedAt        time.Time
 	store            *store
@@ -53,6 +54,7 @@ func New(cfg config.Config) (*Server, error) {
 		return nil, err
 	}
 	server := &Server{cfg: cfg, startedAt: time.Now().UTC(), store: db, livekit: newLiveKitManager(cfg.LiveKitURL, cfg.LiveKitPublicURL, cfg.LiveKitAPIKey, cfg.LiveKitAPISecret), rooms: rooms, members: members, sockets: map[string]map[*websocket.Conn]struct{}{}, eventStreams: map[string]map[eventStream]struct{}{}, attempts: map[string][]time.Time{}, monitors: map[string]*monitorSession{}, stop: make(chan struct{})}
+	server.fusion = newFusionHub()
 	now := time.Now().UTC()
 	for _, room := range rooms {
 		if room.EmptyDeadline.IsZero() {
@@ -74,7 +76,7 @@ func New(cfg config.Config) (*Server, error) {
 	return server, nil
 }
 
-func (s *Server) Close() error { close(s.stop); return s.store.close() }
+func (s *Server) Close() error { close(s.stop); s.fusion.close(); return s.store.close() }
 
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
@@ -91,6 +93,9 @@ func (s *Server) Handler() http.Handler {
 		writeJSON(w, http.StatusOK, map[string]any{"status": "ok"})
 	})
 	mux.HandleFunc("GET /api/v1/info", s.withAccess(s.featureInfo))
+	mux.HandleFunc("GET /api/v1/fusion/rooms", s.withAccess(s.listFusion))
+	mux.HandleFunc("PUT /api/v1/fusion/rooms/{room}", s.withAccess(s.syncFusion))
+	mux.HandleFunc("GET /api/v1/fusion/rooms/{room}/relay", s.withAccess(s.relayFusion))
 	mux.HandleFunc("GET /api/v1/media-health", s.withAccess(s.mediaHealth))
 	mux.HandleFunc("GET /api/v1/rooms", s.withAccess(s.listRooms))
 	mux.HandleFunc("POST /api/v1/rooms", s.withAccess(s.createRoom))
@@ -193,7 +198,7 @@ func (s *Server) withSession(next func(http.ResponseWriter, *http.Request, *Memb
 }
 
 func (s *Server) info(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{"instanceId": s.cfg.InstanceID, "name": s.cfg.InstanceName, "protocolVersion": 2, "features": s.clientFeatures(), "maxRoomParticipants": s.cfg.MaximumParticipants, "adminListeningSupported": s.cfg.AdminToken != ""})
+	writeJSON(w, http.StatusOK, map[string]any{"instanceId": s.cfg.InstanceID, "name": s.cfg.InstanceName, "protocolVersion": 2, "fusionProtocolVersion": 1, "features": s.clientFeatures(), "maxRoomParticipants": s.cfg.MaximumParticipants, "adminListeningSupported": s.cfg.AdminToken != ""})
 }
 
 func (s *Server) mediaHealth(w http.ResponseWriter, r *http.Request) {
@@ -693,7 +698,7 @@ func (s *Server) connectionGrant(room *Room, member *Member, resume string) (map
 }
 
 func (s *Server) roomJSON(room *Room) map[string]any {
-	return map[string]any{"joinSalt": base64.StdEncoding.EncodeToString(room.JoinSalt), "id": room.ID, "name": room.Name, "memberCount": s.memberCount(room.ID), "maxParticipants": room.MaxParticipants, "hostNickname": room.HostNickname, "hostDisconnectTimeoutMinutes": room.HostDisconnectTimeoutMinutes, "hybridAudioSupported": true, "hybridAudioEnabled": room.HybridAudioEnabled, "presenceAnnouncementsSupported": true, "presenceAnnouncementsEnabled": room.PresenceAnnouncementsEnabled, "adminListeningAvailable": len(room.MonitoringKey) > 0, "adminListening": s.monitorCountLocked(room.ID) > 0}
+	return map[string]any{"joinSalt": base64.StdEncoding.EncodeToString(room.JoinSalt), "id": room.ID, "name": room.Name, "memberCount": s.memberCount(room.ID), "maxParticipants": room.MaxParticipants, "hostNickname": room.HostNickname, "hostDisconnectTimeoutMinutes": room.HostDisconnectTimeoutMinutes, "hybridAudioSupported": false, "hybridAudioEnabled": false, "presenceAnnouncementsSupported": true, "presenceAnnouncementsEnabled": room.PresenceAnnouncementsEnabled, "adminListeningAvailable": len(room.MonitoringKey) > 0, "adminListening": s.monitorCountLocked(room.ID) > 0}
 }
 func (s *Server) memberCount(roomID string) int {
 	count := 0

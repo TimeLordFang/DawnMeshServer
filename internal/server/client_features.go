@@ -22,7 +22,7 @@ type clientFeatures struct {
 }
 
 func (s *Server) clientFeatures() clientFeatures {
-	f := clientFeatures{SchemaVersion: 1, HybridAudio: true, HybridMaxPeers: 4, HybridMaxRttMs: 120, HybridStableSamples: 3, HybridMaxLossPercent: 3, HybridMaxJitterMs: 40}
+	f := clientFeatures{SchemaVersion: 1, HybridAudio: false, HybridMaxPeers: 4, HybridMaxRttMs: 120, HybridStableSamples: 3, HybridMaxLossPercent: 3, HybridMaxJitterMs: 40}
 	path := s.cfg.ClientFeaturesPath
 	if path == "" {
 		return f
@@ -44,6 +44,7 @@ func (s *Server) clientFeatures() clientFeatures {
 		f.HybridAudio = false
 		return f
 	}
+	custom.HybridAudio = false // Public rooms no longer negotiate a second media route.
 	return custom
 }
 func (s *Server) featureInfo(w http.ResponseWriter, r *http.Request) {

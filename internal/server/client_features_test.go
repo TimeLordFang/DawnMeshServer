@@ -7,7 +7,7 @@ import (
 
 func TestFeaturesReloadWithoutRestartAndFailClosed(t *testing.T) {
 	s := testServer(t)
-	if f := s.clientFeatures(); !f.HybridAudio || f.HybridMaxLossPercent != 3 || f.HybridMaxJitterMs != 40 {
+	if f := s.clientFeatures(); f.HybridAudio || f.HybridMaxLossPercent != 3 || f.HybridMaxJitterMs != 40 {
 		t.Fatal("missing default capability")
 	}
 	path := t.TempDir() + "/features.json"
@@ -19,11 +19,11 @@ func TestFeaturesReloadWithoutRestartAndFailClosed(t *testing.T) {
 		}
 	}
 	write(`{"schemaVersion":1,"hybridAudio":true,"hybridMaxPeers":2,"hybridMaxRttMs":80,"hybridStableSamples":5,"notice":"test"}`)
-	if f := s.clientFeatures(); !f.HybridAudio || f.HybridMaxPeers != 2 || f.Notice != "test" || f.HybridMaxLossPercent != 3 || f.HybridMaxJitterMs != 40 {
+	if f := s.clientFeatures(); f.HybridAudio || f.HybridMaxPeers != 2 || f.Notice != "test" || f.HybridMaxLossPercent != 3 || f.HybridMaxJitterMs != 40 {
 		t.Fatal(f)
 	}
 	write(`{"schemaVersion":1,"hybridAudio":true,"hybridMaxPeers":4,"hybridMaxRttMs":120,"hybridStableSamples":3,"hybridMaxLossPercent":0,"hybridMaxJitterMs":80}`)
-	if f := s.clientFeatures(); !f.HybridAudio || f.HybridMaxLossPercent != 0 || f.HybridMaxJitterMs != 80 {
+	if f := s.clientFeatures(); f.HybridAudio || f.HybridMaxLossPercent != 0 || f.HybridMaxJitterMs != 80 {
 		t.Fatal("hot thresholds ignored", f)
 	}
 	for _, thresholds := range []string{`"hybridMaxLossPercent":21`, `"hybridMaxLossPercent":-1`, `"hybridMaxJitterMs":201`, `"hybridMaxJitterMs":0`} {

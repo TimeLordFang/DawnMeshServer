@@ -10,6 +10,8 @@ DawnMesh Server is the self-hosted control plane for DawnMesh public intercom ro
 
 The project does not request or renew HTTPS certificates. Put the API and LiveKit signalling behind an existing Nginx TLS endpoint.
 
+Independent fusion rooms (Android 1.1.0-beta.6 / Server 0.3.0-beta.4) allow offline room creation and nearby admission. Any admitted online member can synchronize the creator-signed roster and relay encrypted frames. Ordinary Internet rooms remain LiveKit-only. See [fusion protocol and limits](docs/FUSION_ROOMS.md).
+
 ## Features
 
 - 25 participants per room by default, configurable through `DAWNMESH_MAX_PARTICIPANTS`

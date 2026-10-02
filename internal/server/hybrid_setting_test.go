@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-func TestHybridSettingRequiresCurrentHostAndSurvivesReload(t *testing.T) {
+func TestPublicRoomRejectsLegacyHybridEnableButAllowsClearingPreference(t *testing.T) {
 	s := testServer(t)
 	room := &Room{ID: "presence-room", Name: "Room", HostMemberID: "host", MaxParticipants: 25, CreatedAt: time.Now(), HostDisconnectTimeoutMinutes: 30}
 	host := &Member{ID: "host", RoomID: room.ID, Nickname: "Host", IsHost: true, ResumeTokenHash: tokenHash("host-token")}
@@ -32,21 +32,21 @@ func TestHybridSettingRequiresCurrentHostAndSurvivesReload(t *testing.T) {
 		s.setHybridAudio(w, r, caller)
 		return w.Code
 	}
-	if code := put(guest, `{"enabled":true}`); code != http.StatusForbidden {
+	if code := put(guest, `{"enabled":false}`); code != http.StatusForbidden {
 		t.Fatalf("guest status %d", code)
 	}
 	if code := put(host, `{}`); code != http.StatusBadRequest {
 		t.Fatalf("missing flag status %d", code)
 	}
-	if code := put(host, `{"enabled":true}`); code != http.StatusOK {
+	if code := put(host, `{"enabled":true}`); code != http.StatusConflict {
 		t.Fatalf("host status %d", code)
 	}
 	rooms, _, err := s.store.load(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !rooms[room.ID].HybridAudioEnabled {
-		t.Fatal("setting lost on reload")
+	if rooms[room.ID].HybridAudioEnabled {
+		t.Fatal("public hybrid unexpectedly enabled")
 	}
 	// A formerly-host caller can still hold a stale role object: the room's host ID wins.
 	room.HostMemberID = guest.ID

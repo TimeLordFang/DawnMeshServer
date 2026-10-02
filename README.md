@@ -10,6 +10,8 @@ DawnMesh Server 是「曙光之声」公网对讲模式的自托管控制平面�
 
 本项目不申请或续期 HTTPS 证书。API 和 LiveKit 信令可以接入已有 Nginx，由 Nginx 完成 TLS 卸载。
 
+新增独立融合房（Android 1.1.0-beta.6 / Server 0.3.0-beta.4）：房主可离线建房，任一已入房的联网成员同步签名名单并中继远程通信。普通公网房恢复纯 LiveKit 模式；无需改动现有 `/api/` 反向代理规则。详见 [融合房协议与部署边界](docs/FUSION_ROOMS.md)。
+
 ## 功能
 
 - 一个房间默认最多 25 人，可通过 `DAWNMESH_MAX_PARTICIPANTS` 调整
