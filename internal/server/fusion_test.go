@@ -175,3 +175,83 @@ func TestFusionNeverRelaysPlaintextAudio(t *testing.T) {
 		t.Fatal("truncated packet accepted")
 	}
 }
+
+func TestFusionAdmittedPeersReconnectWithoutCreatorAndRenewOnlyActiveRoom(t *testing.T) {
+	s := testServer(t)
+	f := newFusionFixture(t)
+	if code := uploadFusion(t, s, f, f.state(uint64(time.Now().UnixMilli()), false), f.key); code != 200 {
+		t.Fatal(code)
+	}
+	// Simulate a creator whose signed roster is old, with an existing retained room.
+	s.fusion.mu.Lock()
+	s.fusion.rooms[f.id].Revision = uint64(time.Now().Add(-2 * time.Minute).UnixMilli())
+	s.fusion.mu.Unlock()
+	httpServer := httptest.NewServer(s.Handler())
+	defer httpServer.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	dial := func(key string) (*websocket.Conn, *http.Response, error) {
+		header := http.Header{"Authorization": []string{"Bearer server-access"}}
+		if key != "" {
+			header.Set("X-Fusion-Key", key)
+		}
+		return websocket.Dial(ctx, strings.Replace(httpServer.URL, "http", "ws", 1)+"/api/v1/fusion/rooms/"+f.id+"/relay", &websocket.DialOptions{HTTPHeader: header})
+	}
+	for _, key := range []string{"", "wrong"} {
+		conn, response, err := dial(key)
+		if err == nil {
+			conn.CloseNow()
+			t.Fatal("unadmitted device resumed stale room")
+		}
+		if response == nil || response.StatusCode != 404 {
+			t.Fatal("expected stale admission rejection", response, err)
+		}
+	}
+	a, _, err := dial(f.key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.CloseNow()
+	b, _, err := dial(f.key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer b.CloseNow()
+	s.fusion.mu.Lock()
+	s.fusion.rooms[f.id].updated = time.Now().Add(-29 * time.Minute)
+	revision := s.fusion.rooms[f.id].Revision
+	s.fusion.mu.Unlock()
+	packet := []byte{11, 2, 0, 1, 0, 1, 42}
+	if err := a.Write(ctx, websocket.MessageBinary, packet); err != nil {
+		t.Fatal(err)
+	}
+	_, received, err := b.Read(ctx)
+	if err != nil || !bytes.Equal(received, packet) {
+		t.Fatal("peer relay lost without creator", err)
+	}
+	s.fusion.mu.Lock()
+	current := s.fusion.rooms[f.id]
+	if time.Since(current.updated) > time.Second || current.Revision != revision {
+		s.fusion.mu.Unlock()
+		t.Fatal("activity must refresh retention, never forge a newer signed roster")
+	}
+	current.ended = true
+	s.fusion.mu.Unlock()
+	conn, response, err := dial(f.key)
+	if err == nil {
+		conn.CloseNow()
+		t.Fatal("ended room resumed")
+	}
+	if response == nil || response.StatusCode != 404 {
+		t.Fatal(err)
+	}
+	s.fusion.mu.Lock()
+	current.ended = false
+	current.updated = time.Now().Add(-31 * time.Minute)
+	s.fusion.mu.Unlock()
+	conn, _, err = dial(f.key)
+	if err == nil {
+		conn.CloseNow()
+		t.Fatal("expired inactive room resumed")
+	}
+}

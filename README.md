@@ -193,4 +193,4 @@ DawnMesh Server 使用 [GNU Affero General Public License v3.0](LICENSE)（`AGPL
 
 网页对讲支持在房间页面按住空格键通话；松开、切换窗口、页面隐藏或触摸取消立即停止按住通话。输入框及对话框不会触发此快捷键。首次发言需允许麦克风，收听不需要麦克风权限；若浏览器限制自动播放，请点击“启用收听”。公网访问须使用 HTTPS，且反向代理不能覆盖网页的麦克风权限策略。更新部署时请同步 `deploy/nginx.example.conf` 中的 `/ui/assets/` 路由，以加载新前端与加密 Worker。
 
-当前测试版 0.3.0-beta.3 配套 Android 1.1.0-beta.4，新增丢包/抖动热配置并修复 Go 模块校验。客户端改为健康直连优先，公网中断保留已建立直连；协议仍为 2。详见 [Beta 发布说明](docs/RELEASE_0.3.0-beta.3.md)。
+当前测试版 0.3.0-beta.5 配套 Android 1.1.0-beta.8：房主快照过期后，已入房成员仍可凭有效房间能力恢复融合房中继，活跃成员数据续期房间记录。需更新服务端二进制。详见 [Beta 发布说明](docs/RELEASE_0.3.0-beta.5.md)。

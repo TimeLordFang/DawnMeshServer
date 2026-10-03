@@ -202,13 +202,21 @@ func (s *Server) relayFusion(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("room")
 	h.mu.Lock()
 	room := h.rooms[id]
-	if room == nil || room.ended || time.Since(time.UnixMilli(int64(room.Revision))) > 90*time.Second || len(room.peers) >= 18 {
+	if room == nil || room.ended || time.Since(room.updated) > 30*time.Minute || len(room.peers) >= 18 {
 		h.mu.Unlock()
 		writeError(w, 404, "融合房暂不可达")
 		return
 	}
 	hash := append([]byte(nil), room.secretHash...)
 	authenticated := fusionKeyMatches(r.Header.Get("X-Fusion-Key"), hash)
+	// Previously admitted devices retain the room capability when its creator
+	// loses connectivity. They may restore a relay without a fresh signed roster;
+	// new PAKE admissions still require a live creator's snapshot.
+	if !authenticated && time.Since(time.UnixMilli(int64(room.Revision))) > 90*time.Second {
+		h.mu.Unlock()
+		writeError(w, 404, "房主暂不可达，暂不接纳新成员")
+		return
+	}
 	h.mu.Unlock()
 	if r.Header.Get("X-Fusion-Key") != "" && !authenticated {
 		writeError(w, 403, "融合房凭证无效")
@@ -305,6 +313,12 @@ func (s *Server) relayFusion(w http.ResponseWriter, r *http.Request) {
 		if current == nil || (current.ended && now.Sub(current.updated) > 3*time.Second) {
 			h.mu.Unlock()
 			return
+		}
+		// Keep an active admitted group alive independently of the creator.
+		// Do not change Revision (signed by the creator), reopen ended rooms,
+		// or allow unauthenticated handshake traffic to renew the room lease.
+		if authenticated && !current.ended {
+			current.updated = now
 		}
 		if now.Sub(current.lastPruned) > time.Second {
 			for key, t := range current.seen {

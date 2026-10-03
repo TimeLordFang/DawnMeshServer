@@ -199,4 +199,4 @@ push-to-talk. Listening works independently of microphone permission. Click the
 sound button if autoplay is blocked. Public access requires HTTPS and a reverse
 proxy that preserves the client's microphone permissions policy.
 
-Server 0.2.6 accompanies Android 1.0.4 and fixes host promotion and media permission recovery. Existing 0.2.5 rooms remain valid. See [release notes](docs/RELEASE_0.2.6.md).
+Server 0.3.0-beta.5 accompanies Android 1.1.0-beta.8. Admitted fusion members can reconnect with their existing room capability after the creator-signed roster becomes stale; authenticated traffic renews room retention without modifying signed state. Update the server binary. See [release notes](docs/RELEASE_0.3.0-beta.5.md).
