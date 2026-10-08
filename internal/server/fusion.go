@@ -20,6 +20,12 @@ import (
 	"github.com/coder/websocket"
 )
 
+const fusionMaxMembers = 16
+const fusionMaxStateBytes = 74 + fusionMaxMembers*(18+40)
+const fusionMaxRelayConnections = fusionMaxMembers + 4
+const fusionPacketsPerSecond = fusionMaxMembers * 64
+const fusionPacketCacheSize = 16384
+
 type fusionHub struct {
 	mu    sync.Mutex
 	rooms map[string]*fusionRoom
@@ -79,7 +85,7 @@ func parseFusion(id string, manifest, state []byte, now time.Time) (*fusionRoom,
 		return nil, bad
 	}
 	name := manifest[65 : len(manifest)-64]
-	if !utf8.Valid(name) || len(state) < 74 || len(state) > 422 || state[8] > 1 || state[9] > 6 {
+	if !utf8.Valid(name) || len(state) < 74 || len(state) > fusionMaxStateBytes || state[8] > 1 || state[9] > fusionMaxMembers {
 		return nil, bad
 	}
 	body := append(append([]byte{2}, pub...), state[:len(state)-64]...)
@@ -100,7 +106,7 @@ func parseFusion(id string, manifest, state []byte, now time.Time) (*fusionRoom,
 		}
 		memberID := state[offset]
 		length := int(state[offset+17])
-		if memberID < 1 || memberID > 6 || ids[memberID] || length > 40 || offset+18+length > len(state)-64 {
+		if memberID < 1 || memberID > fusionMaxMembers || ids[memberID] || length > 40 || offset+18+length > len(state)-64 {
 			return nil, bad
 		}
 		device := base64.RawURLEncoding.EncodeToString(state[offset+1 : offset+17])
@@ -202,7 +208,7 @@ func (s *Server) relayFusion(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("room")
 	h.mu.Lock()
 	room := h.rooms[id]
-	if room == nil || room.ended || time.Since(room.updated) > 30*time.Minute || len(room.peers) >= 18 {
+	if room == nil || room.ended || time.Since(room.updated) > 30*time.Minute || len(room.peers) >= fusionMaxRelayConnections {
 		h.mu.Unlock()
 		writeError(w, 404, "融合房暂不可达")
 		return
@@ -233,7 +239,7 @@ func (s *Server) relayFusion(w http.ResponseWriter, r *http.Request) {
 	p := &fusionPeer{out: make(chan []byte, 128), cancel: cancel}
 	h.mu.Lock()
 	room = h.rooms[id]
-	if room == nil || room.ended || len(room.peers) >= 18 {
+	if room == nil || room.ended || len(room.peers) >= fusionMaxRelayConnections {
 		h.mu.Unlock()
 		return
 	}
@@ -284,7 +290,7 @@ func (s *Server) relayFusion(w http.ResponseWriter, r *http.Request) {
 			count = 0
 		}
 		count++
-		if count > 400 || (!authenticated && count > 12) {
+		if count > fusionPacketsPerSecond || (!authenticated && count > 12) {
 			return
 		}
 		if kind == websocket.MessageText {
@@ -328,7 +334,7 @@ func (s *Server) relayFusion(w http.ResponseWriter, r *http.Request) {
 			}
 			current.lastPruned = now
 		}
-		if _, exists := current.seen[digest]; !exists && len(current.seen) < 8192 {
+		if _, exists := current.seen[digest]; !exists && len(current.seen) < fusionPacketCacheSize {
 			current.seen[digest] = now
 			for peer := range current.peers {
 				if peer != p {

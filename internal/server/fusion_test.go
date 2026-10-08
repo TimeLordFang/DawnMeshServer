@@ -9,6 +9,7 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -253,5 +254,99 @@ func TestFusionAdmittedPeersReconnectWithoutCreatorAndRenewOnlyActiveRoom(t *tes
 	if err == nil {
 		conn.CloseNow()
 		t.Fatal("expired inactive room resumed")
+	}
+}
+
+func (f fusionFixture) stateWithCount(revision uint64, count int) []byte {
+	body := make([]byte, 10)
+	binary.BigEndian.PutUint64(body, revision)
+	body[9] = byte(count)
+	name := []byte(strings.Repeat("名", 13) + "X") // Exactly 40 UTF-8 bytes.
+	for i := 1; i <= count; i++ {
+		body = append(body, byte(i))
+		body = append(body, bytes.Repeat([]byte{byte(i)}, 16)...)
+		body = append(body, byte(len(name)))
+		body = append(body, name...)
+	}
+	signed := append(append([]byte{2}, f.private.Public().(ed25519.PublicKey)...), body...)
+	return append(body, ed25519.Sign(f.private, signed)...)
+}
+
+func TestFusionSixteenMemberLongRosterAndOverflow(t *testing.T) {
+	s := testServer(t)
+	f := newFusionFixture(t)
+	rev := uint64(time.Now().UnixMilli())
+	state := f.stateWithCount(rev, 16)
+	if len(state) != fusionMaxStateBytes {
+		t.Fatalf("unexpected maximum roster size %d", len(state))
+	}
+	if code := uploadFusion(t, s, f, state, f.key); code != 200 {
+		t.Fatalf("16-member roster rejected: %d", code)
+	}
+	if len(s.fusion.rooms[f.id].Members) != 16 {
+		t.Fatal("truncated roster")
+	}
+	if code := uploadFusion(t, s, f, f.stateWithCount(rev+1, 17), f.key); code != 403 {
+		t.Fatalf("17-member roster accepted: %d", code)
+	}
+	if len(s.fusion.rooms[f.id].Members) != 16 {
+		t.Fatal("invalid roster replaced existing state")
+	}
+}
+
+func TestFusionSixteenRelayConnectionsHandleFullRoomPacketRate(t *testing.T) {
+	s := testServer(t)
+	f := newFusionFixture(t)
+	if code := uploadFusion(t, s, f, f.stateWithCount(uint64(time.Now().UnixMilli()), 16), f.key); code != 200 {
+		t.Fatal(code)
+	}
+	server := httptest.NewServer(s.Handler())
+	defer server.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	peers := make([]*websocket.Conn, 16)
+	for i := range peers {
+		conn, _, err := websocket.Dial(ctx, strings.Replace(server.URL, "http", "ws", 1)+"/api/v1/fusion/rooms/"+f.id+"/relay", &websocket.DialOptions{HTTPHeader: http.Header{"X-Fusion-Key": []string{f.key}, "Authorization": []string{"Bearer server-access"}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		peers[i] = conn
+		defer conn.CloseNow()
+	}
+	// 800 packets model a full room's 20ms voice-frame rate and exceed the
+	// old 400/s limit. All 15 receiving connections drain simultaneously.
+	const packets = 800
+	errors := make(chan error, 15)
+	for _, peer := range peers[:15] {
+		go func(conn *websocket.Conn) {
+			for i := 0; i < packets; i++ {
+				_, data, err := conn.Read(ctx)
+				if err != nil {
+					errors <- err
+					return
+				}
+				if len(data) != 7 || binary.BigEndian.Uint16(data[2:4]) != uint16(i) {
+					errors <- fmt.Errorf("wrong relay sequence %x", data)
+					return
+				}
+			}
+			errors <- nil
+		}(peer)
+	}
+	for i := 0; i < packets; i++ {
+		data := []byte{11, 16, 0, 0, 0, 1, 42}
+		binary.BigEndian.PutUint16(data[2:4], uint16(i))
+		if err := peers[15].Write(ctx, websocket.MessageBinary, data); err != nil {
+			t.Fatal(err)
+		}
+		// Keep the burst below one second, without overflowing bounded writers.
+		if i%10 == 0 {
+			time.Sleep(time.Millisecond)
+		}
+	}
+	for i := 0; i < 15; i++ {
+		if err := <-errors; err != nil {
+			t.Fatal(err)
+		}
 	}
 }

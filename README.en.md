@@ -10,7 +10,7 @@ DawnMesh Server is the self-hosted control plane for DawnMesh public intercom ro
 
 The project does not request or renew HTTPS certificates. Put the API and LiveKit signalling behind an existing Nginx TLS endpoint.
 
-Independent fusion rooms (Android 1.1.0-beta.6 / Server 0.3.0-beta.4) allow offline room creation and nearby admission. Any admitted online member can synchronize the creator-signed roster and relay encrypted frames. Ordinary Internet rooms remain LiveKit-only. See [fusion protocol and limits](docs/FUSION_ROOMS.md).
+Independent fusion rooms (Android 1.1.0 / Server 0.3.0) allow offline room creation and nearby admission. Any admitted online member can synchronize the creator-signed roster and relay encrypted frames. Ordinary Internet rooms remain LiveKit-only. See [fusion protocol and limits](docs/FUSION_ROOMS.md).
 
 ## Features
 
@@ -199,4 +199,4 @@ push-to-talk. Listening works independently of microphone permission. Click the
 sound button if autoplay is blocked. Public access requires HTTPS and a reverse
 proxy that preserves the client's microphone permissions policy.
 
-Server 0.3.0-beta.5 accompanies Android 1.1.0-beta.8. Admitted fusion members can reconnect with their existing room capability after the creator-signed roster becomes stale; authenticated traffic renews room retention without modifying signed state. Update the server binary. See [release notes](docs/RELEASE_0.3.0-beta.5.md).
+Server 0.3.0 accompanies Android 1.1.0 and supports 16-member independent fusion rooms, signed rosters, encrypted relay deduplication and admitted-member recovery. Update all clients and the server binary. See [release notes](docs/RELEASE_0.3.0.md).

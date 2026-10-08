@@ -10,7 +10,7 @@ DawnMesh Server 是「曙光之声」公网对讲模式的自托管控制平面�
 
 本项目不申请或续期 HTTPS 证书。API 和 LiveKit 信令可以接入已有 Nginx，由 Nginx 完成 TLS 卸载。
 
-新增独立融合房（Android 1.1.0-beta.6 / Server 0.3.0-beta.4）：房主可离线建房，任一已入房的联网成员同步签名名单并中继远程通信。普通公网房恢复纯 LiveKit 模式；无需改动现有 `/api/` 反向代理规则。详见 [融合房协议与部署边界](docs/FUSION_ROOMS.md)。
+新增独立融合房（Android 1.1.0 / Server 0.3.0）：房主可离线建房，任一已入房的联网成员同步签名名单并中继远程通信。普通公网房恢复纯 LiveKit 模式；无需改动现有 `/api/` 反向代理规则。详见 [融合房协议与部署边界](docs/FUSION_ROOMS.md)。
 
 ## 功能
 
@@ -193,4 +193,4 @@ DawnMesh Server 使用 [GNU Affero General Public License v3.0](LICENSE)（`AGPL
 
 网页对讲支持在房间页面按住空格键通话；松开、切换窗口、页面隐藏或触摸取消立即停止按住通话。输入框及对话框不会触发此快捷键。首次发言需允许麦克风，收听不需要麦克风权限；若浏览器限制自动播放，请点击“启用收听”。公网访问须使用 HTTPS，且反向代理不能覆盖网页的麦克风权限策略。更新部署时请同步 `deploy/nginx.example.conf` 中的 `/ui/assets/` 路由，以加载新前端与加密 Worker。
 
-当前测试版 0.3.0-beta.5 配套 Android 1.1.0-beta.8：房主快照过期后，已入房成员仍可凭有效房间能力恢复融合房中继，活跃成员数据续期房间记录。需更新服务端二进制。详见 [Beta 发布说明](docs/RELEASE_0.3.0-beta.5.md)。
+当前正式版 0.3.0 配套 Android 1.1.0，融合房扩大到 16 人，保留签名名单、加密中继和老成员重连。所有客户端与服务端需配套升级。详见 [正式版发布说明](docs/RELEASE_0.3.0.md)。
