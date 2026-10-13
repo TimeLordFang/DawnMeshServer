@@ -23,7 +23,7 @@ Go 和 npm 锁定文件均重新生成，直接及 go.mod 要求的传递依赖�
 通过 Go 交叉编译生成 amd64/arm64，避免执行错误架构的 Node/Go 镜像。
 新增不发布镜像的两架构 CI 构建；Dependabot 补充 npm 周更。
 
-验证：前端类型检查/生产构建、4 项 Node 测试、14 项 Chromium 浏览器回归、
+验证：前端类型检查/生产构建、4 项 Node 测试、17 项 Chromium 浏览器回归、
 Dart 对应的浏览器加密向量、Go 竞态测试/go vet、Linux amd64/arm64 交叉编译。
 
 govulncheck 1.9.0：实际导入包和可达调用均为 0 个漏洞。模块级记录
@@ -33,4 +33,5 @@ GO-2026-5932 指向 golang.org/x/crypto 中未维护的 openpgp 包；本项目�
 来源：npm registry、Go proxy、https://nodejs.org/dist/index.json、
 https://go.dev/dl/?mode=json、https://github.com/livekit/livekit/releases/latest、
 https://dl-cdn.alpinelinux.org/alpine/latest-stable/releases/aarch64/latest-releases.yaml、
+npm 审计结果为 0 个漏洞，锁定文件使用官方 npm registry 下载地址。
 各 Actions、Buildx 和 BuildKit 的 GitHub 官方稳定发行记录。
