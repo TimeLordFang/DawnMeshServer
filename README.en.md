@@ -199,4 +199,4 @@ push-to-talk. Listening works independently of microphone permission. Click the
 sound button if autoplay is blocked. Public access requires HTTPS and a reverse
 proxy that preserves the client's microphone permissions policy.
 
-Server 0.3.0 accompanies Android 1.1.0 and supports 16-member independent fusion rooms, signed rosters, encrypted relay deduplication and admitted-member recovery. Update all clients and the server binary. See [release notes](docs/RELEASE_0.3.0.md).
+Server 0.3.1 accompanies Android 1.1.1 / iOS 1.0.0 and supports 16-member independent fusion rooms, signed rosters, encrypted relay deduplication and admitted-member recovery. Update all clients and the server binary. See [release notes](docs/RELEASE_0.3.1.md).
