@@ -50,3 +50,25 @@ func setValidEnvironment(t *testing.T) {
 	t.Setenv("DAWNMESH_MAX_PARTICIPANTS", "100")
 	t.Setenv("DAWNMESH_MAX_ROOMS", "1000")
 }
+
+func TestProxyAndAccessConfiguration(t *testing.T) {
+	for _, tt := range []struct {
+		key, value string
+		bad        bool
+	}{
+		{"DAWNMESH_TRUSTED_PROXY_CIDRS", "", false},
+		{"DAWNMESH_TRUSTED_PROXY_CIDRS", "127.0.0.1/32, ::1/128,172.18.0.1/32", false},
+		{"DAWNMESH_TRUSTED_PROXY_CIDRS", "not-a-cidr", true},
+		{"DAWNMESH_ACCESS_TOKEN", "123", true},
+		{"DAWNMESH_ACCESS_TOKEN", "", false},
+	} {
+		t.Run(tt.key+tt.value, func(t *testing.T) {
+			setValidEnvironment(t)
+			t.Setenv(tt.key, tt.value)
+			_, err := Load()
+			if (err != nil) != tt.bad {
+				t.Fatal(err)
+			}
+		})
+	}
+}

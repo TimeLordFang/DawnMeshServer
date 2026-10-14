@@ -34,7 +34,7 @@ func (s *Server) joinRoom(w http.ResponseWriter, r *http.Request) {
 	}
 	roomID := r.PathValue("room")
 	s.mu.Lock()
-	if !s.allowAttemptLocked("join:ip:"+clientIP(r), 20, time.Minute) ||
+	if !s.allowAttemptLocked("join:ip:"+s.clientIP(r), 20, time.Minute) ||
 		!s.allowAttemptLocked("join:device:"+body.DeviceID, 10, time.Minute) ||
 		!s.allowAttemptLocked("join:room:"+roomID, 30, time.Minute) {
 		s.mu.Unlock()

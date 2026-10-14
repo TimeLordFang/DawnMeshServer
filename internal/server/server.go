@@ -9,7 +9,6 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
-	"net"
 	"net/http"
 	"net/url"
 	"sort"
@@ -44,6 +43,10 @@ type Server struct {
 }
 
 func New(cfg config.Config) (*Server, error) {
+	if cfg.AccessToken == "" {
+		slog.Warn("open instance: anyone can list and create rooms; set DAWNMESH_ACCESS_TOKEN to restrict access")
+	}
+
 	db, err := openStore(cfg.DatabasePath)
 	if err != nil {
 		return nil, err
@@ -145,7 +148,7 @@ func (s *Server) withEventAccess(next http.HandlerFunc) http.HandlerFunc {
 			access = browserSocketCredential(r, "dawn-access")
 		}
 		if s.cfg.AccessToken != "" && !constantEqual(access, s.cfg.AccessToken) {
-			slog.Warn("management websocket access rejected", "remote", clientIP(r), "host", r.Host)
+			slog.Warn("management websocket access rejected", "remote", s.clientIP(r), "host", r.Host)
 			writeError(w, http.StatusUnauthorized, "服务器访问凭证无效")
 			return
 		}
@@ -278,7 +281,7 @@ func (s *Server) createRoom(w http.ResponseWriter, r *http.Request) {
 	room := &Room{JoinSalt: salt, JoinCredentialHash: tokenHash(base64.StdEncoding.EncodeToString(credential)), WrappedRoomKey: wrapped, ID: roomID, Name: body.Name, HostMemberID: memberID, HostNickname: body.Nickname, MaxParticipants: body.MaxParticipants, HostDisconnectTimeoutMinutes: body.HostTimeout, CreatedAt: now, MonitoringKey: wrappedMonitoringKey}
 	member := &Member{DeviceProofHash: deviceProofHash(body.DeviceProof), ID: memberID, RoomID: roomID, Nickname: body.Nickname, DeviceID: body.DeviceID, ResumeTokenHash: tokenHash(resume), CanSpeak: true, JoinOrder: 1, IsHost: true}
 	s.mu.Lock()
-	if len(s.rooms) >= s.cfg.MaximumRooms || !s.allowAttemptLocked("create:ip:"+clientIP(r), 10, time.Minute) || !s.allowAttemptLocked("create:device:"+body.DeviceID, 3, time.Minute) {
+	if len(s.rooms) >= s.cfg.MaximumRooms || !s.allowAttemptLocked("create:ip:"+s.clientIP(r), 10, time.Minute) || !s.allowAttemptLocked("create:device:"+body.DeviceID, 3, time.Minute) {
 		s.mu.Unlock()
 		writeError(w, http.StatusTooManyRequests, "建房请求过于频繁或服务器房间已达上限")
 		return
@@ -348,11 +351,21 @@ func (s *Server) resume(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusGone, "恢复窗口已结束")
 		return
 	}
+	if !s.allowAttemptLocked("resume:"+member.ID, 20, time.Minute) {
+		writeError(w, http.StatusTooManyRequests, "恢复过于频繁，请稍后再试")
+		return
+	}
 	newToken := randomID(32)
 	member.ResumeTokenHash = tokenHash(newToken)
-	member.ReconnectDeadline = time.Time{}
-	if member.IsHost {
-		room.HostReconnectDeadline = time.Time{}
+	// Issuing credentials does not establish presence. Keep the original
+	// offline deadline, so repeated resume calls cannot extend a reservation.
+	if !member.Connected {
+		if member.ReconnectDeadline.IsZero() {
+			member.ReconnectDeadline = now.Add(reconnectRetention)
+		}
+		if member.IsHost && room.HostReconnectDeadline.IsZero() {
+			room.HostReconnectDeadline = now.Add(time.Duration(room.HostDisconnectTimeoutMinutes) * time.Minute)
+		}
 	}
 	_ = s.store.saveMember(r.Context(), member)
 	_ = s.store.saveRoom(r.Context(), room)
@@ -588,7 +601,7 @@ func (s *Server) endRoom(w http.ResponseWriter, r *http.Request, caller *Member)
 func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 	member := s.eventPrincipal(eventSessionToken(r))
 	if member == nil {
-		slog.Warn("management websocket session rejected", "remote", clientIP(r), "host", r.Host)
+		slog.Warn("management websocket session rejected", "remote", s.clientIP(r), "host", r.Host)
 		writeError(w, http.StatusUnauthorized, "会话无效")
 		return
 	}
@@ -597,7 +610,7 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 		OriginPatterns: s.websocketOriginPatterns(),
 	})
 	if err != nil {
-		slog.Warn("management websocket upgrade rejected", "remote", clientIP(r), "host", r.Host, "origin", r.Header.Get("Origin"), "forwardedHost", r.Header.Get("X-Forwarded-Host"), "error", err)
+		slog.Warn("management websocket upgrade rejected", "remote", s.clientIP(r), "host", r.Host, "origin", r.Header.Get("Origin"), "forwardedHost", r.Header.Get("X-Forwarded-Host"), "error", err)
 		return
 	}
 	defer conn.CloseNow()
@@ -1004,19 +1017,6 @@ func bearer(value string) string {
 	return ""
 }
 func constantEqual(a, b string) bool { return subtle.ConstantTimeCompare([]byte(a), []byte(b)) == 1 }
-func clientIP(r *http.Request) string {
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		host = r.RemoteAddr
-	}
-	remote := net.ParseIP(host)
-	if remote != nil && remote.IsLoopback() {
-		if forwarded := strings.TrimSpace(strings.Split(r.Header.Get("X-Forwarded-For"), ",")[0]); net.ParseIP(forwarded) != nil {
-			return forwarded
-		}
-	}
-	return host
-}
 func (s *Server) allowAttemptLocked(key string, limit int, window time.Duration) bool {
 	now := time.Now().UTC()
 	cutoff := now.Add(-window)

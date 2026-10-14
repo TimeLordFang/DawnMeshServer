@@ -2,6 +2,7 @@ package config
 
 import (
 	"errors"
+	"net/netip"
 	"net/url"
 	"os"
 	"strconv"
@@ -9,6 +10,7 @@ import (
 )
 
 type Config struct {
+	TrustedProxyCIDRs   []netip.Prefix
 	ClientFeaturesPath  string
 	ListenAddress       string
 	DatabasePath        string
@@ -26,6 +28,25 @@ type Config struct {
 }
 
 func Load() (Config, error) {
+	// An empty explicit value disables proxy trust. Default to the local nginx
+	// deployment only; container gateways must be configured explicitly.
+	rawProxies, configured := os.LookupEnv("DAWNMESH_TRUSTED_PROXY_CIDRS")
+	if !configured {
+		rawProxies = "127.0.0.1/32,::1/128"
+	}
+	var proxies []netip.Prefix
+	for _, raw := range strings.Split(rawProxies, ",") {
+		raw = strings.TrimSpace(raw)
+		if raw == "" {
+			continue
+		}
+		prefix, err := netip.ParsePrefix(raw)
+		if err != nil {
+			return Config{}, errors.New("DAWNMESH_TRUSTED_PROXY_CIDRS must contain IP CIDRs")
+		}
+		proxies = append(proxies, prefix.Masked())
+	}
+
 	maximum, err := strconv.Atoi(value("DAWNMESH_MAX_PARTICIPANTS", "100"))
 	if err != nil || maximum < 2 || maximum > 500 {
 		return Config{}, errors.New("DAWNMESH_MAX_PARTICIPANTS must be between 2 and 500")
@@ -35,6 +56,7 @@ func Load() (Config, error) {
 		return Config{}, errors.New("DAWNMESH_MAX_ROOMS must be between 1 and 100000")
 	}
 	cfg := Config{
+		TrustedProxyCIDRs:   proxies,
 		ClientFeaturesPath:  strings.TrimSpace(os.Getenv("DAWNMESH_CLIENT_FEATURES_FILE")),
 		ListenAddress:       value("DAWNMESH_LISTEN", ":8080"),
 		DatabasePath:        value("DAWNMESH_DATABASE", "/data/dawnmesh.db"),
@@ -52,6 +74,9 @@ func Load() (Config, error) {
 	}
 	if cfg.InstanceID == "" || cfg.PublicBaseURL == "" || cfg.LiveKitURL == "" || cfg.LiveKitPublicURL == "" || cfg.LiveKitAPIKey == "" || len(cfg.LiveKitAPISecret) < 32 {
 		return Config{}, errors.New("instance id, public URLs, LiveKit key, and a 32+ character LiveKit secret are required")
+	}
+	if cfg.AccessToken != "" && len(cfg.AccessToken) < 32 {
+		return Config{}, errors.New("DAWNMESH_ACCESS_TOKEN must contain at least 32 characters; leave empty only for an intentionally open instance")
 	}
 	if cfg.AdminToken != "" && len(cfg.AdminToken) < 32 {
 		return Config{}, errors.New("DAWNMESH_ADMIN_TOKEN must contain at least 32 characters")

@@ -64,7 +64,7 @@ func (s *Server) withAdminAccess(next http.HandlerFunc) http.HandlerFunc {
 		}
 		if !constantEqual(bearer(r.Header.Get("Authorization")), s.cfg.AdminToken) {
 			s.mu.Lock()
-			allowed := s.allowAttemptLocked("admin:ip:"+clientIP(r), 10, time.Minute)
+			allowed := s.allowAttemptLocked("admin:ip:"+s.clientIP(r), 10, time.Minute)
 			s.mu.Unlock()
 			if !allowed {
 				writeError(w, http.StatusTooManyRequests, "登录尝试过多，请稍后再试")

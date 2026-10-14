@@ -1,3 +1,4 @@
+import { deriveInviteCredentials } from './invite-kdf';
 import { resetPresence, observePresence, memberLeft, displayMembers } from './presence';
 import * as DawnCrypto from './crypto';
 import { bindPressToTalk } from '../shared/press-to-talk';
@@ -373,7 +374,7 @@ async function createRoom() {
     const inviteCode = $("#create-invite-input").value.trim();
     const roomKey = crypto.getRandomValues(new Uint8Array(32));
     const salt = crypto.getRandomValues(new Uint8Array(16));
-    const keys = await operation("邀请码密钥派生", () => DawnCrypto.internetInviteCredentials(inviteCode, salt));
+    const keys = await operation("邀请码密钥派生", () => deriveInviteCredentials(inviteCode, salt));
     const wrappedRoomKey = DawnCrypto.base64(await DawnCrypto.aesEncrypt(keys.wrappingKey, roomKey, keys.aad));
     const chatCipher = await operation("聊天密钥初始化", () => DawnCrypto.ChatCipher.create(roomKey));
     setBusy(button, true, "正在创建…");
@@ -400,7 +401,7 @@ async function completeAdmission(roomId: string, inviteCode: string): Promise<En
   const rooms = await api<{rooms: RoomSummary[]}>('/api/v1/rooms');
   const room = rooms.rooms.find(r => r.id === roomId);
   if (!room?.joinSalt) throw new RequestError('请升级服务端并重新创建房间');
-  const keys = await operation('邀请码密钥派生', () => DawnCrypto.internetInviteCredentials(inviteCode.trim(), DawnCrypto.fromBase64(room.joinSalt!)));
+  const keys = await operation('邀请码密钥派生', () => deriveInviteCredentials(inviteCode.trim(), DawnCrypto.fromBase64(room.joinSalt!)));
   const grant = await api<Grant & {wrappedRoomKey: string}>(`/api/v1/rooms/${encodeURIComponent(roomId)}/join`, {
     method: 'POST', body: JSON.stringify({nickname: state.nickname, deviceId: state.deviceId, deviceProof, joinCredential: keys.credential}),
   });

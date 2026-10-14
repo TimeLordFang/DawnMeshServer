@@ -380,8 +380,10 @@ export interface PakeKeys { transcript: Bytes; sharedKey: Bytes; confirmA: Bytes
       const counter = new DataView(packet.buffer, packet.byteOffset + 8, 4).getUint32(0, false);
       const previous = this.seen.get(prefix) ?? -1;
       if (counter <= previous) throw new Error("replayed chat packet");
+      // Never evict replay state while this key is in use. Rejecting a new
+      // prefix must not prevent established senders from sending again.
+      if (!this.seen.has(prefix) && this.seen.size >= 128) throw new Error("too many chat senders; create a new room");
       this.seen.set(prefix, counter);
-      if (this.seen.size > 128) throw new Error("too many chat senders");
       return clear;
     }
   }
