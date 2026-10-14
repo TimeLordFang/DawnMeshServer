@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build the embedded browser UI and package a standalone DawnMesh Server.
+# Build the embedded browser UI and package the standalone DawnMesh Server binary.
 set -euo pipefail
 
 project_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -21,8 +21,9 @@ Usage: ./scripts/build.sh [options]
   -h, --help      Show this help
 
 Requires Go (see go.mod), Node.js >=24, npm, tar. Outputs dist/*.tar.gz,
-dist/*/dawnmesh-server[.exe], and dist/SHA256SUMS. Frontend assets and the
-LiveKit encryption worker are embedded: Node.js is not needed at runtime.
+dist/*/dawnmesh-server[.exe], and dist/SHA256SUMS. Each archive contains the executable and license notices. Frontend assets and the LiveKit encryption worker are embedded:
+Node.js is not needed at runtime. Use configuration and deployment examples
+from the matching repository tag.
 HELP
 }
 while (($#)); do
@@ -70,12 +71,9 @@ package_target() {
   mkdir -p "$build_stage/$name"
   printf 'Building %s/%s…\n' "$os" "$arch"
   CGO_ENABLED=0 GOOS="$os" GOARCH="$arch" go build -trimpath -ldflags='-s -w' -o "$build_stage/$name/$binary" ./cmd/dawnmesh-server
-  cp LICENSE THIRD_PARTY_NOTICES.md README.md README.en.md config.example.env livekit.example.yaml compose.yaml "$build_stage/$name/"
-  cp -R deploy docs "$build_stage/$name/"
+  cp LICENSE THIRD_PARTY_NOTICES.md "$build_stage/$name/"
   mkdir -p "$build_stage/$name/licenses"
   cp frontend/LICENSE.livekit-client "$build_stage/$name/licenses/"
-  mkdir -p "$build_stage/$name/scripts"
-  cp scripts/init-config.sh "$build_stage/$name/scripts/"
   COPYFILE_DISABLE=1 tar -C "$build_stage" -czf "dist/$name.tar.gz" "$name"
   mkdir -p "dist/$name"
   cp "$build_stage/$name/$binary" "dist/$name/$binary"

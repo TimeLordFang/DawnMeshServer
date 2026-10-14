@@ -103,7 +103,7 @@ Live listening is disabled by default. Only an opted-in host sends the room E2EE
 
 ## Deploy a release binary
 
-Every `v*` tag publishes Linux `amd64` and `arm64` archives plus `SHA256SUMS` on [GitHub Releases](https://github.com/TimeLordFang/DawnMeshServer/releases):
+Every `v*` tag publishes Linux `amd64` and `arm64` archives plus `SHA256SUMS` on [GitHub Releases](https://github.com/TimeLordFang/DawnMeshServer/releases). Each archive contains only the server executable with the browser assets embedded. Use configuration, Compose, reverse-proxy, and other deployment files from the matching repository tag:
 
 ```bash
 sha256sum -c SHA256SUMS
@@ -122,6 +122,33 @@ set +a
 ```
 
 Compose uses `env_file: .env` and does not require manually sourcing the file.
+
+The repository includes [`deploy/dawnmesh-server.service`](deploy/dawnmesh-server.service) for running the release binary as a standalone systemd service:
+
+```bash
+sudo useradd --system --home-dir /var/lib/dawnmesh-server --shell /usr/sbin/nologin dawnmesh
+sudo install -m 0755 dawnmesh-server /usr/local/bin/dawnmesh-server
+sudo install -d -m 0750 -o root -g dawnmesh /etc/dawnmesh-server
+sudo install -m 0640 -o root -g dawnmesh .env /etc/dawnmesh-server/dawnmesh.env
+sudo install -m 0644 deploy/dawnmesh-server.service /etc/systemd/system/dawnmesh-server.service
+```
+
+Set the database and host-local LiveKit addresses in `/etc/dawnmesh-server/dawnmesh.env`:
+
+```dotenv
+DAWNMESH_LISTEN=127.0.0.1:8080
+DAWNMESH_DATABASE=/var/lib/dawnmesh-server/dawnmesh.db
+LIVEKIT_URL=http://127.0.0.1:7880
+```
+
+`StateDirectory=dawnmesh-server` creates `/var/lib/dawnmesh-server` with the correct ownership. After checking the remaining URLs, tokens, and LiveKit key/secret, enable the service:
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now dawnmesh-server
+sudo systemctl status dawnmesh-server
+sudo journalctl -u dawnmesh-server -f
+```
 
 ## TURN and network ports
 
@@ -181,10 +208,12 @@ Install Go (see `go.mod`), Node.js 24 or newer stable, and npm, then run:
 
 The script installs locked dependencies, checks TypeScript, builds the browser
 interfaces, runs protocol/Go tests and vet, then writes standalone executables,
-`.tar.gz` packages and `SHA256SUMS` to `dist/`. `--skip-tests` skips tests but
-retains TypeScript checking. The interfaces and LiveKit encryption worker are
-embedded in the Go executable; Node.js is only a build dependency. LiveKit still
-runs as the separate media service used by the existing deployment.
+binary-only `.tar.gz` packages and `SHA256SUMS` to `dist/`. Configuration and
+deployment files are not copied into the packages; use the files from the
+matching repository tag. `--skip-tests` skips tests but retains TypeScript
+checking. The interfaces and LiveKit encryption worker are embedded in the Go
+executable; Node.js is only a build dependency. LiveKit still runs as the
+separate media service used by the existing deployment.
 
 Frontend sources live in `frontend/`; generated assets are written to
 `internal/server/web/` and are not tracked by Git. Use `./scripts/build.sh` for
@@ -200,3 +229,5 @@ sound button if autoplay is blocked. Public access requires HTTPS and a reverse
 proxy that preserves the client's microphone permissions policy.
 
 Server 0.3.1 accompanies Android 1.1.1 / iOS 1.0.0 and supports 16-member independent fusion rooms, signed rosters, encrypted relay deduplication and admitted-member recovery. Update all clients and the server binary. See [release notes](docs/RELEASE_0.3.1.md).
+
+Proxy rate limiting: `DAWNMESH_TRUSTED_PROXY_CIDRS` defaults to `127.0.0.1/32,::1/128`; an empty value disables forwarded-header trust. Bare-metal nginx can use the default. For Compose, inspect the application network with `docker network inspect`, add only its actual gateway `/32` (IPv6 `/128`), recreate the container and verify distinct client IP buckets. The nginx example overwrites incoming XFF. Configure nginx real-IP trust first if a CDN precedes it; never trust all private networks. Before upgrading, replace nonempty short access tokens with 32+ character values. Empty tokens still enable an open instance with a startup warning.

@@ -111,7 +111,7 @@ docker compose up -d --build
 
 ## 使用二进制部署
 
-每个 `v*` 标签会在 [GitHub Releases](https://github.com/TimeLordFang/DawnMeshServer/releases) 生成 Linux `amd64`、`arm64` 压缩包和 `SHA256SUMS`。校验并安装：
+每个 `v*` 标签会在 [GitHub Releases](https://github.com/TimeLordFang/DawnMeshServer/releases) 生成 Linux `amd64`、`arm64` 压缩包和 `SHA256SUMS`。压缩包仅包含已经嵌入网页资源的服务端二进制；配置示例、Compose、反向代理和其他部署文件请使用对应版本标签中的仓库文件。校验并安装：
 
 ```bash
 sha256sum -c SHA256SUMS
@@ -130,6 +130,33 @@ set +a
 ```
 
 示例配置已将带空格的实例名称写成 shell 可读取的带引号形式。Compose 使用 `env_file: .env`，不需要手动 `source`。
+
+仓库提供 [`deploy/dawnmesh-server.service`](deploy/dawnmesh-server.service)，可将二进制作为独立的 systemd 服务运行：
+
+```bash
+sudo useradd --system --home-dir /var/lib/dawnmesh-server --shell /usr/sbin/nologin dawnmesh
+sudo install -m 0755 dawnmesh-server /usr/local/bin/dawnmesh-server
+sudo install -d -m 0750 -o root -g dawnmesh /etc/dawnmesh-server
+sudo install -m 0640 -o root -g dawnmesh .env /etc/dawnmesh-server/dawnmesh.env
+sudo install -m 0644 deploy/dawnmesh-server.service /etc/systemd/system/dawnmesh-server.service
+```
+
+将 `/etc/dawnmesh-server/dawnmesh.env` 中的数据库和本机 LiveKit 地址调整为：
+
+```dotenv
+DAWNMESH_LISTEN=127.0.0.1:8080
+DAWNMESH_DATABASE=/var/lib/dawnmesh-server/dawnmesh.db
+LIVEKIT_URL=http://127.0.0.1:7880
+```
+
+`StateDirectory=dawnmesh-server` 会自动创建并授权 `/var/lib/dawnmesh-server`。确认其余 URL、令牌和 LiveKit key/secret 后启用服务：
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now dawnmesh-server
+sudo systemctl status dawnmesh-server
+sudo journalctl -u dawnmesh-server -f
+```
 
 ## TURN 与网络端口
 
@@ -187,10 +214,12 @@ DawnMesh Server 使用 [GNU Affero General Public License v3.0](LICENSE)（`AGPL
 ./scripts/build.sh --os linux --arch arm64 --version 1.0.0
 ```
 
-脚本会执行 `npm ci`、TypeScript 检查、Vite 构建、前端协议回归、Go 测试与 vet，然后生成 `dist/DawnMeshServer-版本-平台-架构/` 中的二进制、包含部署说明与配置示例的 `.tar.gz` 和 `dist/SHA256SUMS`。`--skip-tests` 可跳过测试，但仍进行 TypeScript 类型检查。前端及 LiveKit 加密 Worker 均由 `go:embed` 编入 `dawnmesh-server`，部署时无需 Node.js 或外置前端目录。LiveKit 媒体服务仍按原部署方式运行。
+脚本会执行 `npm ci`、TypeScript 检查、Vite 构建、前端协议回归、Go 测试与 vet，然后生成 `dist/DawnMeshServer-版本-平台-架构/` 中的二进制、仅包含该二进制的 `.tar.gz` 和 `dist/SHA256SUMS`。配置与部署文件不复制到发布包中，以对应版本标签中的仓库文件为准。`--skip-tests` 可跳过测试，但仍进行 TypeScript 类型检查。前端及 LiveKit 加密 Worker 均由 `go:embed` 编入 `dawnmesh-server`，部署时无需 Node.js 或外置前端目录。LiveKit 媒体服务仍按原部署方式运行。
 
 前端源码位于 `frontend/`，生成资源写入 `internal/server/web/`，该目录属于构建产物，不纳入 Git。请使用 `./scripts/build.sh` 完成正式构建；若需要手动执行 `go build`、`go test` 或 `go vet`，必须先运行 `npm --prefix frontend ci && npm --prefix frontend run build`。Docker 和 GitHub Actions 会自动完成这一步。
 
 网页对讲支持在房间页面按住空格键通话；松开、切换窗口、页面隐藏或触摸取消立即停止按住通话。输入框及对话框不会触发此快捷键。首次发言需允许麦克风，收听不需要麦克风权限；若浏览器限制自动播放，请点击“启用收听”。公网访问须使用 HTTPS，且反向代理不能覆盖网页的麦克风权限策略。更新部署时请同步 `deploy/nginx.example.conf` 中的 `/ui/assets/` 路由，以加载新前端与加密 Worker。
 
 当前正式版 0.3.1 配套 Android 1.1.1 / iOS 1.0.0，融合房扩大到 16 人，保留签名名单、加密中继和老成员重连。所有客户端与服务端需配套升级。详见 [正式版发布说明](docs/RELEASE_0.3.1.md)。
+
+反向代理限流：`DAWNMESH_TRUSTED_PROXY_CIDRS` 默认只信任 `127.0.0.1/32,::1/128`，设置为空可关闭代理头信任。裸机 nginx 使用默认值；Compose 部署请用 `docker network inspect` 查出应用网络实际网关，仅添加该网关的 `/32`（IPv6 为 `/128`），重建容器后验证两名客户端的 IP 分桶。示例 nginx 会覆盖外部 XFF；前置 CDN 时先配置 nginx 的可信 real-IP 链。不要信任整个私有网段。升级前将非空的短访问 token 换成至少 32 字符；空 token 仍表示公开实例，服务端会记录提示。
