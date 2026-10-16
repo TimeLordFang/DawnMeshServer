@@ -24,3 +24,5 @@ mocked. They cover permission delays/denial, muted publication, keyboard input,
 window blur, cleanup, playback unlocking and mobile overflow. A live LiveKit
 server and a physical microphone are still required for hardware/network and
 native-device end-to-end acceptance.
+
+依赖安装与安全审计使用仓库根目录和 frontend/.npmrc 中的官方 npm registry（兼容从根目录 --prefix 调用或进入 frontend 调用）。npm 12 的可选 fsevents 安装脚本显式禁用，保持其他依赖的默认脚本审查；浏览器与生产构建不需要该本机文件监听扩展。

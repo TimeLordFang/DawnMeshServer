@@ -220,6 +220,6 @@ DawnMesh Server 使用 [GNU Affero General Public License v3.0](LICENSE)（`AGPL
 
 网页对讲支持在房间页面按住空格键通话；松开、切换窗口、页面隐藏或触摸取消立即停止按住通话。输入框及对话框不会触发此快捷键。首次发言需允许麦克风，收听不需要麦克风权限；若浏览器限制自动播放，请点击“启用收听”。公网访问须使用 HTTPS，且反向代理不能覆盖网页的麦克风权限策略。更新部署时请同步 `deploy/nginx.example.conf` 中的 `/ui/assets/` 路由，以加载新前端与加密 Worker。
 
-当前正式版 0.3.2 配套 Android 1.1.2 / iOS 1.0.1，融合房扩大到 16 人，保留签名名单、加密中继和老成员重连。所有客户端与服务端需配套升级。详见 [正式版发布说明](docs/RELEASE_0.3.2.md)。
+当前正式版 0.3.3 配套 Android 1.1.3 / iOS 1.0.2，改善媒体 SDK 按需加载并保留默认构建体积检查。三端线协议保持兼容，融合房继续支持 16 人。详见 [正式版发布说明](docs/RELEASE_0.3.3.md)。
 
 反向代理限流：`DAWNMESH_TRUSTED_PROXY_CIDRS` 默认只信任 `127.0.0.1/32,::1/128`，设置为空可关闭代理头信任。裸机 nginx 使用默认值；Compose 部署请用 `docker network inspect` 查出应用网络实际网关，仅添加该网关的 `/32`（IPv6 为 `/128`），重建容器后验证两名客户端的 IP 分桶。示例 nginx 会覆盖外部 XFF；前置 CDN 时先配置 nginx 的可信 real-IP 链。不要信任整个私有网段。升级前将非空的短访问 token 换成至少 32 字符；空 token 仍表示公开实例，服务端会记录提示。

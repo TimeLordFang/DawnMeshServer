@@ -7,7 +7,6 @@ export default defineConfig({
     outDir: '../internal/server/web',
     emptyOutDir: true,
     target: 'es2022',
-    chunkSizeWarningLimit: 2000,
     rolldownOptions: {
       input: {
         client: fileURLToPath(new URL('./client/index.html', import.meta.url)),

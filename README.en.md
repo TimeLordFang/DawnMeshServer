@@ -228,6 +228,6 @@ push-to-talk. Listening works independently of microphone permission. Click the
 sound button if autoplay is blocked. Public access requires HTTPS and a reverse
 proxy that preserves the client's microphone permissions policy.
 
-Server 0.3.2 accompanies Android 1.1.2 / iOS 1.0.1 and supports 16-member independent fusion rooms, signed rosters, encrypted relay deduplication and admitted-member recovery. Update all clients and the server binary. See [release notes](docs/RELEASE_0.3.2.md).
+Server 0.3.3 accompanies Android 1.1.3 / iOS 1.0.2, loads the media SDK on demand and keeps the default bundle-size checks. The wire protocol and 16-member fusion rooms remain compatible. See [release notes](docs/RELEASE_0.3.3.md).
 
 Proxy rate limiting: `DAWNMESH_TRUSTED_PROXY_CIDRS` defaults to `127.0.0.1/32,::1/128`; an empty value disables forwarded-header trust. Bare-metal nginx can use the default. For Compose, inspect the application network with `docker network inspect`, add only its actual gateway `/32` (IPv6 `/128`), recreate the container and verify distinct client IP buckets. The nginx example overwrites incoming XFF. Configure nginx real-IP trust first if a CDN precedes it; never trust all private networks. Before upgrading, replace nonempty short access tokens with 32+ character values. Empty tokens still enable an open instance with a startup warning.

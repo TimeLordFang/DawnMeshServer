@@ -4,7 +4,7 @@ import * as DawnCrypto from './crypto';
 import { bindPressToTalk } from '../shared/press-to-talk';
 import { MicrophoneGate } from '../shared/microphone-gate';
 import type { ActiveRoom, ClientState, RoomSummary, Member, Grant, EnterRoom, ManagementEvent, EventChannel, ServerInfo } from './types';
-import * as LivekitClient from 'livekit-client';
+import type * as LivekitClient from 'livekit-client';
 import workerURL from 'livekit-client/e2ee-worker?url';
 import { $ } from './dom';
 import { asError, RequestError } from '../shared/dom';
@@ -722,14 +722,16 @@ async function initializeAudioDevices(): Promise<void> {
       if (!mediaTrack) throw new RequestError("设备未提供音频轨道");
       mediaTrack.enabled = false;
       if (!current()) { stream.getTracks().forEach(t => t.stop()); return; }
-      track = new LivekitClient.LocalAudioTrack(mediaTrack, mediaTrack.getConstraints(), false);
+      const { LocalAudioTrack, Track } = await import('livekit-client');
+      if (!current()) { stream.getTracks().forEach(t => t.stop()); return; }
+      track = new LocalAudioTrack(mediaTrack, mediaTrack.getConstraints(), false);
       track.stopOnMute = false;
       const gate = new MicrophoneGate();
       gate.attach(track);
       active.micTrack = track;
       active.micGate = gate;
       await track.mute();
-      await room.localParticipant.publishTrack(track, { ...audioOptions().publish, source: LivekitClient.Track.Source.Microphone });
+      await room.localParticipant.publishTrack(track, { ...audioOptions().publish, source: Track.Source.Microphone });
       if (!current()) { gate.dispose(); await room.localParticipant.unpublishTrack(track); return; }
       active.audioReady = true;
       active.microphonePermissionVerified = true;
@@ -766,8 +768,10 @@ async function initializeAudioDevices(): Promise<void> {
 async function connectMedia(grant: Grant) {
   const active = state.active!;
   if (!active || active.leaving) return;
+  const { Room, RoomEvent, Track, ExternalE2EEKeyProvider, isE2EESupported } = await import('livekit-client');
+  if (state.active !== active || active.leaving) return;
   if (typeof Worker === "undefined") throw new RequestError("当前浏览器不支持 WebRTC 端到端加密");
-  if (typeof LivekitClient.isE2EESupported === "function" && !LivekitClient.isE2EESupported()) {
+  if (typeof isE2EESupported === "function" && !isE2EESupported()) {
     throw new RequestError("当前浏览器不支持 LiveKit 端到端加密，请升级 Chrome、Edge、Firefox 或 Safari");
   }
   disposeMicrophone(active);
@@ -782,9 +786,9 @@ async function connectMedia(grant: Grant) {
   $("#remote-audio").replaceChildren();
   active.remoteAudioTracks = 0;
   const worker = new Worker(workerURL, { type: "module" });
-  const keyProvider = new LivekitClient.ExternalE2EEKeyProvider();
+  const keyProvider = new ExternalE2EEKeyProvider();
   const options = audioOptions();
-  const room = new LivekitClient.Room({
+  const room = new Room({
     // Mobile clients apply LiveKit E2EE to media only. Chat has its own
     // AES-GCM envelope, so keeping the data channel outside LiveKit E2EE makes
     // browser and mobile packets symmetric.
@@ -796,9 +800,9 @@ async function connectMedia(grant: Grant) {
   });
   active.room = room;
   active.worker = worker;
-  room.on(LivekitClient.RoomEvent.TrackSubscribed, (track) => {
+  room.on(RoomEvent.TrackSubscribed, (track) => {
     if (state.active !== active || active.room !== room || active.leaving) return;
-    if (track.kind !== LivekitClient.Track.Kind.Audio) return;
+    if (track.kind !== Track.Kind.Audio) return;
     const element = track.attach();
     element.autoplay = true;
     element.setAttribute("playsinline", "");
@@ -808,21 +812,21 @@ async function connectMedia(grant: Grant) {
     element.play().catch(() => { active.playbackBlocked = true; renderAudioSetup(); });
     renderAudioSetup();
   });
-  room.on(LivekitClient.RoomEvent.TrackUnsubscribed, (track) => {
+  room.on(RoomEvent.TrackUnsubscribed, (track) => {
     if (state.active !== active || active.room !== room || active.leaving) return;
     for (const element of track.detach()) element.remove();
     active.remoteAudioTracks = Math.max(0, active.remoteAudioTracks - 1);
     renderAudioSetup();
   });
-  for (const event of [LivekitClient.RoomEvent.ParticipantConnected, LivekitClient.RoomEvent.ParticipantDisconnected]) {
+  for (const event of [RoomEvent.ParticipantConnected, RoomEvent.ParticipantDisconnected]) {
     room.on(event, () => { if (state.active === active && active.room === room && !active.leaving) renderMembers(); });
   }
-  room.on(LivekitClient.RoomEvent.ActiveSpeakersChanged, (speakers) => {
+  room.on(RoomEvent.ActiveSpeakersChanged, (speakers) => {
     if (state.active !== active || active.room !== room || active.leaving) return;
     active.speaking = new Set(speakers.map((participant) => participant.identity));
     renderMembers();
   });
-  room.on(LivekitClient.RoomEvent.ParticipantPermissionsChanged, async (_, participant) => {
+  room.on(RoomEvent.ParticipantPermissionsChanged, async (_, participant) => {
     if (state.active !== active || active.room !== room || active.leaving) return;
     if (participant?.identity !== active.memberId) return;
     active.mediaCanPublish = room.localParticipant.permissions?.canPublish ?? false;
@@ -831,37 +835,37 @@ async function connectMedia(grant: Grant) {
     await applyMicrophone(currentMicWanted());
     renderTalkState();
   });
-  room.on(LivekitClient.RoomEvent.AudioPlaybackStatusChanged, () => {
+  room.on(RoomEvent.AudioPlaybackStatusChanged, () => {
     if (state.active !== active || active.room !== room || active.leaving) return;
     active.playbackBlocked = !room.canPlaybackAudio;
     $("#resume-audio").hidden = room.canPlaybackAudio;
     renderAudioSetup();
   });
-  room.on(LivekitClient.RoomEvent.MediaDevicesError, (cause) => {
+  room.on(RoomEvent.MediaDevicesError, (cause) => {
     if (state.active !== active || active.room !== room || active.leaving) return;
     active.microphoneError = errorText(cause);
     active.mediaDiagnostic = active.microphoneError;
     console.warn("[DawnMesh client] media device error", cause);
     renderAudioSetup();
   });
-  room.on(LivekitClient.RoomEvent.EncryptionError, (cause, participant) => {
+  room.on(RoomEvent.EncryptionError, (cause, participant) => {
     if (state.active !== active || active.room !== room || active.leaving) return;
     active.mediaDiagnostic = `端到端解密失败${participant?.identity ? `（${participant.identity}）` : ""}`;
     console.error("[DawnMesh client] E2EE media error", cause, participant);
     renderAudioSetup();
   });
-  room.on(LivekitClient.RoomEvent.ParticipantEncryptionStatusChanged, (enabled) => {
+  room.on(RoomEvent.ParticipantEncryptionStatusChanged, (enabled) => {
     if (state.active !== active || active.room !== room || active.leaving || !enabled) return;
     active.mediaDiagnostic = "端到端加密已就绪";
     renderAudioSetup();
   });
-  room.on(LivekitClient.RoomEvent.TrackSubscriptionFailed, (trackSid, cause, participant) => {
+  room.on(RoomEvent.TrackSubscriptionFailed, (trackSid, cause, participant) => {
     if (state.active !== active || active.room !== room || active.leaving) return;
     active.mediaDiagnostic = "远端语音轨道订阅失败";
     console.error("[DawnMesh client] audio subscription failed", trackSid, cause, participant);
     renderAudioSetup();
   });
-  room.on(LivekitClient.RoomEvent.Reconnecting, () => {
+  room.on(RoomEvent.Reconnecting, () => {
     if (state.active !== active || active.room !== room) return;
     resetPresence(active);
     stopPTT(active);
@@ -869,8 +873,8 @@ async function connectMedia(grant: Grant) {
     setRoomStatus("reconnecting", "媒体连接波动，正在恢复");
     renderTalkState();
   });
-  room.on(LivekitClient.RoomEvent.Reconnected, () => { resetPresence(active); renderMembers(); active.mediaCanPublish = room.localParticipant.permissions?.canPublish ?? false; updateSpeakingPermission(active); requestMediaPermission(active, true); updateConnectionStatus(active); void applyMicrophone(currentMicWanted()); });
-  room.on(LivekitClient.RoomEvent.Disconnected, (reason) => {
+  room.on(RoomEvent.Reconnected, () => { resetPresence(active); renderMembers(); active.mediaCanPublish = room.localParticipant.permissions?.canPublish ?? false; updateSpeakingPermission(active); requestMediaPermission(active, true); updateConnectionStatus(active); void applyMicrophone(currentMicWanted()); });
+  room.on(RoomEvent.Disconnected, (reason) => {
     if (active.intentionalMediaDisconnects?.has(room)) return;
     if (state.active === active && !active.leaving) {
       resetPresence(active);
@@ -881,7 +885,7 @@ async function connectMedia(grant: Grant) {
       scheduleMediaReconnect(active.lastMediaError || "媒体连接中断，正在自动恢复");
     }
   });
-  room.on(LivekitClient.RoomEvent.DataReceived, (payload, participant, _kind, topic) => {
+  room.on(RoomEvent.DataReceived, (payload, participant, _kind, topic) => {
     if (state.active !== active || active.room !== room || active.leaving) return;
     if (topic === "dawnmesh.chat.v1" && participant) {
       receiveChat(payload, participant).catch((cause) => {

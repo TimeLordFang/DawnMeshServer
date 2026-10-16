@@ -1,6 +1,6 @@
 import type { AdminRoom, Overview, ListenerGrant } from './types';
 import type { Member } from '../client/types';
-import * as LivekitClient from 'livekit-client';
+import type * as LivekitClient from 'livekit-client';
 import workerURL from 'livekit-client/e2ee-worker?url';
 import { $ } from './dom';
 import { asError, RequestError } from '../shared/dom';
@@ -123,11 +123,14 @@ async function startListening(room: AdminRoom) {
     if (typeof Worker === "undefined") {
       throw new RequestError("当前浏览器不支持实时收听所需的 WebRTC/E2EE 能力");
     }
+    // Load media code before allocating a server-side listener. Browsing the
+    // dashboard does not need the WebRTC SDK, and import failure leaks no grant.
+    const { Room, RoomEvent, Track, ExternalE2EEKeyProvider } = await import('livekit-client');
     if (activeListener) await stopListening();
     const grant = await api<ListenerGrant>(`/api/v1/admin/rooms/${encodeURIComponent(room.id)}/listen`, { method: "POST" });
     const worker = new Worker(workerURL, { type: "module" });
-    const keyProvider = new LivekitClient.ExternalE2EEKeyProvider();
-    const liveRoom = new LivekitClient.Room({
+    const keyProvider = new ExternalE2EEKeyProvider();
+    const liveRoom = new Room({
       e2ee: { keyProvider, worker },
       adaptiveStream: false,
       dynacast: false,
@@ -137,18 +140,18 @@ async function startListening(room: AdminRoom) {
     listeningStatus.textContent = "建立端到端加密的只听连接…";
     listeningPanel.hidden = false;
     resumeAudioButton.hidden = false;
-    liveRoom.on(LivekitClient.RoomEvent.AudioPlaybackStatusChanged, () => {
+    liveRoom.on(RoomEvent.AudioPlaybackStatusChanged, () => {
       if (activeListener?.room !== liveRoom) return;
       resumeAudioButton.hidden = liveRoom.canPlaybackAudio;
     });
-    liveRoom.on(LivekitClient.RoomEvent.EncryptionError, () => {
+    liveRoom.on(RoomEvent.EncryptionError, () => {
       listeningStatus.textContent = "语音解密失败，请确认客户端版本与房间密钥一致。";
     });
-    liveRoom.on(LivekitClient.RoomEvent.Disconnected, () => {
+    liveRoom.on(RoomEvent.Disconnected, () => {
       if (activeListener?.room === liveRoom) void stopListening();
     });
-    liveRoom.on(LivekitClient.RoomEvent.TrackSubscribed, (track) => {
-      if (track.kind !== LivekitClient.Track.Kind.Audio) return;
+    liveRoom.on(RoomEvent.TrackSubscribed, (track) => {
+      if (track.kind !== Track.Kind.Audio) return;
       const element = track.attach();
       element.setAttribute("playsinline", "");
       element.autoplay = true;
@@ -156,13 +159,13 @@ async function startListening(room: AdminRoom) {
       monitorAudio.append(element);
       resumeMonitorAudio().catch(() => {});
     });
-    liveRoom.on(LivekitClient.RoomEvent.TrackUnsubscribed, (track) => {
+    liveRoom.on(RoomEvent.TrackUnsubscribed, (track) => {
       for (const element of track.detach()) element.remove();
     });
-    liveRoom.on(LivekitClient.RoomEvent.Reconnecting, () => {
+    liveRoom.on(RoomEvent.Reconnecting, () => {
       listeningStatus.textContent = "媒体连接波动，正在自动恢复…";
     });
-    liveRoom.on(LivekitClient.RoomEvent.Reconnected, () => {
+    liveRoom.on(RoomEvent.Reconnected, () => {
       listeningStatus.textContent = "正在实时收听端到端加密音频";
     });
     try {
