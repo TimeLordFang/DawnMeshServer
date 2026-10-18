@@ -1,0 +1,50 @@
+[Unit]
+Description=DawnMesh Server
+Documentation=https://github.com/TimeLordFang/DawnMeshServer
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=dawnmesh
+Group=dawnmesh
+WorkingDirectory=/var/lib/dawnmesh-server
+EnvironmentFile=/etc/dawnmesh-server/dawnmesh.env
+ExecStart=/usr/local/bin/dawnmesh-server
+
+# The application handles SIGTERM and allows active HTTP requests up to 10
+# seconds to finish before it exits.
+KillSignal=SIGTERM
+TimeoutStopSec=15s
+Restart=on-failure
+RestartSec=5s
+LimitNOFILE=65536
+
+# Creates /var/lib/dawnmesh-server and grants write access to the service user.
+StateDirectory=dawnmesh-server
+StateDirectoryMode=0750
+UMask=0077
+
+# Service hardening. DawnMesh only needs its state directory and IPv4/IPv6
+# network access.
+NoNewPrivileges=true
+PrivateDevices=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+LockPersonality=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target

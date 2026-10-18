@@ -12,6 +12,8 @@ The project does not request or renew HTTPS certificates. Put the API and LiveKi
 
 Independent fusion rooms (Android 1.1.0 / Server 0.3.0) allow offline room creation and nearby admission. Any admitted online member can synchronize the creator-signed roster and relay encrypted frames. Ordinary Internet rooms remain LiveKit-only. See [fusion protocol and limits](docs/FUSION_ROOMS.md).
 
+See the [documentation index](docs/README.md) for guides and stable release notes.
+
 ## Features
 
 - 25 participants per room by default, configurable through `DAWNMESH_MAX_PARTICIPANTS`
