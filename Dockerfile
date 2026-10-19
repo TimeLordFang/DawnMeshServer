@@ -1,4 +1,4 @@
-FROM --platform=$BUILDPLATFORM node:26.11.1-alpine3.24 AS frontend
+FROM --platform=$BUILDPLATFORM node:26.12.0-alpine3.24 AS frontend
 WORKDIR /src/frontend
 COPY frontend/package.json frontend/package-lock.json ./
 RUN npm install --global npm@12.2.0 && npm ci
