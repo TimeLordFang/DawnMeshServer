@@ -1,11 +1,11 @@
-FROM --platform=$BUILDPLATFORM node:26.11.1-alpine3.24 AS frontend
+FROM --platform=$BUILDPLATFORM node:26.12.1-alpine3.24 AS frontend
 WORKDIR /src/frontend
 COPY frontend/package.json frontend/package-lock.json ./
-RUN npm install --global npm@12.2.0 && npm ci
+RUN npm install --global npm@12.2.1 && npm ci
 COPY frontend/ ./
 RUN npm run build
 
-FROM --platform=$BUILDPLATFORM golang:1.27.2-alpine3.24 AS build
+FROM --platform=$BUILDPLATFORM golang:1.27.3-alpine3.24 AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
@@ -17,7 +17,7 @@ RUN CGO_ENABLED=0 GOOS="${TARGETOS}" GOARCH="${TARGETARCH}" \
     go build -trimpath -ldflags="-s -w" -o /out/dawnmesh-server ./cmd/dawnmesh-server && \
     mkdir -p /out/data
 
-FROM alpine:3.24.2
+FROM alpine:3.24.3
 COPY --from=build /out/dawnmesh-server /usr/local/bin/dawnmesh-server
 COPY --from=build --chown=65532:65532 /out/data /data
 LABEL org.opencontainers.image.title="DawnMesh Server" \
