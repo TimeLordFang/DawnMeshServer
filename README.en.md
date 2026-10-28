@@ -1,18 +1,39 @@
-# DawnMesh Server
+<p align="center">
+  <img src="docs/assets/dawnmesh-logo.png" width="144" height="144" alt="DawnMesh app logo">
+</p>
 
-[简体中文](README.md) · [Releases](https://github.com/TimeLordFang/DawnMeshServer/releases) · [Container image](https://github.com/TimeLordFang/DawnMeshServer/pkgs/container/dawnmeshserver)
+# DawnMesh Server & Web
 
-[![CI](https://github.com/TimeLordFang/DawnMeshServer/actions/workflows/ci.yml/badge.svg)](https://github.com/TimeLordFang/DawnMeshServer/actions/workflows/ci.yml)
-[![Release](https://github.com/TimeLordFang/DawnMeshServer/actions/workflows/release.yml/badge.svg)](https://github.com/TimeLordFang/DawnMeshServer/actions/workflows/release.yml)
-[![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](LICENSE)
+**Beyond the horizon, let voices meet.**
 
-DawnMesh Server is the self-hosted control plane for DawnMesh public intercom rooms. It stores room metadata in SQLite, verifies client admission credentials directly, enforces host moderation, and issues short-lived, least-privilege LiveKit tokens. Voice and chat use client-held LiveKit E2EE keys by default. A host can explicitly allow the self-hosted server administrator to listen when creating a room.
+[Android](https://github.com/TimeLordFang/DawnMesh) · [iOS](https://github.com/TimeLordFang/DawnMeshIOS) · [Server & Web](https://github.com/TimeLordFang/DawnMeshServer)
 
-The project does not request or renew HTTPS certificates. Put the API and LiveKit signalling behind an existing Nginx TLS endpoint.
+[中文](README.md) · [Downloads and release history](https://github.com/TimeLordFang/DawnMeshServer/releases) · [Container images](https://github.com/TimeLordFang/DawnMeshServer/pkgs/container/dawnmeshserver)
 
-Independent fusion rooms (Android 1.1.0 / Server 0.3.0) allow offline room creation and nearby admission. Any admitted online member can synchronize the creator-signed roster and relay encrypted frames. Ordinary Internet rooms remain LiveKit-only. See [fusion protocol and limits](docs/FUSION_ROOMS.md).
+DawnMesh is a voice intercom for nearby offline groups and self-hosted remote rooms. This repository provides its control server, browser intercom and administration console. Android and iOS clients communicate locally without a public service, or use a shared server to reach remote participants.
 
-See the [documentation index](docs/README.md) for guides and stable release notes.
+## Repositories
+
+| Repository | Role |
+| --- | --- |
+| [Android](https://github.com/TimeLordFang/DawnMesh) | Android mobile client for local and remote rooms. |
+| [iOS](https://github.com/TimeLordFang/DawnMeshIOS) | iPhone client using compatible room and encryption protocols. |
+| [Server & Web](https://github.com/TimeLordFang/DawnMeshServer) | Room control, fusion directory and encrypted relay, browser client and admin console. |
+
+## Room modes and deployment dependencies
+
+| Mode | Deployment required | How it connects |
+| --- | --- | --- |
+| Nearby Wi-Fi / Bluetooth | None | Phones communicate over a local link without Internet access. Protocol limits are 16 Wi-Fi or 6 Bluetooth members. |
+| Local offline fusion | None | Create, join and talk over a shared Wi-Fi, hotspot or supported local peer link. |
+| Fusion across networks | DawnMesh Server | Admitted online members publish signed directory state and relay ciphertext through the same server. Remote access needs a reachable gateway; the host need not connect to the server directly. |
+| Internet rooms | DawnMesh Server and LiveKit | The server controls rooms and admission; LiveKit carries real-time media. Clients must reach both services and the media ports. |
+
+The mobile apps do not include a public server. Deploy an instance, then add its HTTPS URL and, when configured, its access credential in **Settings → Servers** on Android or iOS and select the same instance on participating phones. Fusion relay forwards encrypted nearby-room frames over WebSocket, rather than the LiveKit media path. The default Compose deployment includes both services to support both room types. Losing the Internet path does not end established local fusion communication.
+
+The browser client joins Internet rooms, not mobile nearby or fusion rooms. Apple peer Wi-Fi and Android Wi-Fi Direct are separate radio transports; mixed local groups can use shared Wi-Fi/hotspots or supported Bluetooth paths. Device capacity and background behavior require real-device acceptance.
+
+This project does not issue or renew TLS certificates. Put the API and LiveKit signaling behind your existing HTTPS/WSS reverse proxy; follow the deployment and port instructions below. See the [documentation index](docs/README.md) for API and fusion details.
 
 ## Features
 
@@ -28,7 +49,7 @@ See the [documentation index](docs/README.md) for guides and stable release note
 ## Requirements
 
 - Linux `amd64` or `arm64`
-- Docker Engine and Docker Compose, or Go 1.27.1+
+- Docker Engine and Docker Compose, or the Go toolchain specified by `go.mod`
 - Public domains for the DawnMesh API and LiveKit signalling
 - Public UDP 57882 and TCP 57881, or equivalent Layer 4 forwarding
 - An existing Nginx HTTPS entry point
@@ -58,7 +79,7 @@ curl -fsS -H 'Authorization: Bearer <DAWNMESH_ACCESS_TOKEN>' https://talk.exampl
 The default image is `ghcr.io/timelordfang/dawnmeshserver:latest`. Pin a version through `.env` when required:
 
 ```dotenv
-DAWNMESH_IMAGE=ghcr.io/timelordfang/dawnmeshserver:1.0.0
+DAWNMESH_IMAGE=ghcr.io/timelordfang/dawnmeshserver:<chosen-release-tag>
 ```
 
 After the first publication, change the container package visibility to **Public** in GitHub Package settings so anonymous users can pull it. This is a one-time GHCR package setting.
@@ -71,7 +92,7 @@ docker compose up -d --build
 
 Merge the relevant parts of [`deploy/nginx.example.conf`](deploy/nginx.example.conf) into your Nginx configuration. `/api/` should allow WebSocket upgrades and must preserve the original `Host`, `Origin`, and `Sec-WebSocket-Protocol` headers. The last header carries the browser management channel credentials. The server sends a WebSocket heartbeat every 20 seconds; when an upgrade still fails, the web client automatically uses an authenticated HTTPS event stream. An Nginx `401` usually means credential headers were not forwarded, while `403` usually means `Host` and `Origin` did not match. Forward UDP 57882 and TCP 57881 directly when possible. A successful HTTPS health check verifies the control plane only, not the WebRTC media path.
 
-Add `DAWNMESH_PUBLIC_URL` in the Android app's network intercom settings and use `DAWNMESH_ACCESS_TOKEN` as the server credential.
+Add `DAWNMESH_PUBLIC_URL` in **Settings → Servers** on Android or iOS and provide `DAWNMESH_ACCESS_TOKEN` when the instance requires it.
 
 ## Web intercom client
 
@@ -81,7 +102,7 @@ The browser and Android public-room clients share the same protocol and rooms. T
 
 Invite authentication uses a per-room random salt and scrypt-derived admission credential, verified directly by the server. The raw invite is not transmitted. LiveKit media uses the same E2EE room key; chat uses a purpose-separated AES-256-GCM key.
 
-Microphone capture and Web Crypto require an HTTPS secure context (`localhost` is allowed for development). Browser support for WebRTC E2EE, background audio, and output-device selection varies. A mobile browser may suspend or terminate a page after screen lock, so the Android app remains the recommended client for long-running background intercom use. WebSocket credentials are carried in the `Sec-WebSocket-Protocol` request header; configure Nginx and other reverse proxies not to log that header.
+Microphone capture and Web Crypto require an HTTPS secure context (`localhost` is allowed for development). Browser support for WebRTC E2EE, background audio, and output-device selection varies. A mobile browser may suspend or terminate a page after screen lock, so use a native mobile client for sustained intercom sessions and verify its background behavior on the actual device. WebSocket credentials are carried in the `Sec-WebSocket-Protocol` request header; configure Nginx and other reverse proxies not to log that header.
 
 The access credential is kept in tab-scoped `sessionStorage`; the nickname and random device identifier are stored in `localStorage`. Refreshing automatically restores the server lobby. The invite, room key, and rotating resume token remain in page memory, so the previous room is not rejoined after a refresh. Closing the tab also clears the access credential.
 
@@ -176,22 +197,23 @@ New LiveKit join tokens start with audio publication disabled. After an authenti
 
 A four-digit invitation is not strong enough to protect a public service by itself. Generate a high-entropy `DAWNMESH_ACCESS_TOKEN`. `DAWNMESH_ADMIN_TOKEN` also protects host-authorized listening keys, so keep it away from ordinary App users, restrict database and configuration permissions, and keep images updated.
 
-The management protocol is documented in [`docs/API.md`](docs/API.md). It is versioned as `2` (URLs retain `/api/v1`); the Android client rejects incompatible versions and detects unexpected instance-ID changes.
+The management protocol is documented in [`docs/API.md`](docs/API.md). It is versioned as `2` (URLs retain `/api/v1`); the mobile clients reject incompatible versions and detect unexpected instance-ID changes.
 
 ## Development
 
 ```bash
 go test -race ./...
 go vet ./...
-go install golang.org/x/vuln/cmd/govulncheck@v1.8.0
-govulncheck ./...
+# Vulnerability scan tools and configuration are maintained in .github/workflows/ci.yml
 ```
 
 Pushes to `main` and pull requests run module consistency checks, race-enabled tests, `go vet`, vulnerability scanning, and Linux cross-builds. A `v*` tag publishes release archives, checksums, and a multi-architecture GHCR image. Dependabot checks Go modules, Docker images, and GitHub Actions weekly.
 
+Set `RELEASE_TAG` to the chosen, unused release tag before running:
+
 ```bash
-git tag -a v0.1.0 -m "DawnMesh Server v0.1.0"
-git push origin v0.1.0
+git tag -a "$RELEASE_TAG" -m "DawnMesh Server $RELEASE_TAG"
+git push origin "$RELEASE_TAG"
 ```
 
 ## License
@@ -200,12 +222,12 @@ DawnMesh Server is licensed under the [GNU Affero General Public License v3.0](L
 
 ### Local build and packaging
 
-Install Go (see `go.mod`), Node.js 24 or newer stable, and npm, then run:
+Install Go (see `go.mod`), Node.js and npm (requirements in `frontend/package.json`), then run:
 
 ```bash
 ./scripts/build.sh                          # host platform, tests included
 ./scripts/build.sh --linux                  # Linux amd64 and arm64
-./scripts/build.sh --os linux --arch arm64 --version 1.0.0
+./scripts/build.sh --os linux --arch arm64
 ```
 
 The script installs locked dependencies, checks TypeScript, builds the browser
@@ -229,7 +251,5 @@ dialogs) to talk. Release, window blur, page hiding and pointer cancellation sto
 push-to-talk. Listening works independently of microphone permission. Click the
 sound button if autoplay is blocked. Public access requires HTTPS and a reverse
 proxy that preserves the client's microphone permissions policy.
-
-Server 0.3.3 accompanies Android 1.1.3 / iOS 1.0.2, loads the media SDK on demand and keeps the default bundle-size checks. The wire protocol and 16-member fusion rooms remain compatible. See [release notes](docs/RELEASE_0.3.3.md).
 
 Proxy rate limiting: `DAWNMESH_TRUSTED_PROXY_CIDRS` defaults to `127.0.0.1/32,::1/128`; an empty value disables forwarded-header trust. Bare-metal nginx can use the default. For Compose, inspect the application network with `docker network inspect`, add only its actual gateway `/32` (IPv6 `/128`), recreate the container and verify distinct client IP buckets. The nginx example overwrites incoming XFF. Configure nginx real-IP trust first if a CDN precedes it; never trust all private networks. Before upgrading, replace nonempty short access tokens with 32+ character values. Empty tokens still enable an open instance with a startup warning.

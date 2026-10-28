@@ -1,18 +1,43 @@
-# DawnMesh Server（曙光之声服务端）
+<p align="center">
+  <img src="docs/assets/dawnmesh-logo.png" width="144" height="144" alt="DawnMesh 应用 Logo">
+</p>
 
-[English](README.en.md) · [发行版](https://github.com/TimeLordFang/DawnMeshServer/releases) · [容器镜像](https://github.com/TimeLordFang/DawnMeshServer/pkgs/container/dawnmeshserver)
+# DawnMesh Server · 曙光之声服务端与网页
 
-[![CI](https://github.com/TimeLordFang/DawnMeshServer/actions/workflows/ci.yml/badge.svg)](https://github.com/TimeLordFang/DawnMeshServer/actions/workflows/ci.yml)
-[![Release](https://github.com/TimeLordFang/DawnMeshServer/actions/workflows/release.yml/badge.svg)](https://github.com/TimeLordFang/DawnMeshServer/actions/workflows/release.yml)
-[![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](LICENSE)
+**越过地平线，让声音相遇。**
 
-DawnMesh Server 是「曙光之声」公网对讲模式的自托管控制平面。它使用 SQLite 保存房间元数据，直接验证客户端的入房凭据，执行房主管理策略，并签发短时、最小权限的 LiveKit 令牌。语音和聊天内容默认只由客户端持有的 LiveKit E2EE 密钥保护；房主也可以在建房时明确允许自部署服务器管理员实时收听。
+[Android](https://github.com/TimeLordFang/DawnMesh) · [iOS](https://github.com/TimeLordFang/DawnMeshIOS) · [服务端与网页](https://github.com/TimeLordFang/DawnMeshServer)
 
-本项目不申请或续期 HTTPS 证书。API 和 LiveKit 信令可以接入已有 Nginx，由 Nginx 完成 TLS 卸载。
+[English](README.en.md) · [下载与发布记录](https://github.com/TimeLordFang/DawnMeshServer/releases) · [容器镜像](https://github.com/TimeLordFang/DawnMeshServer/pkgs/container/dawnmeshserver)
 
-新增独立融合房（Android 1.1.0 / Server 0.3.0）：房主可离线建房，任一已入房的联网成员同步签名名单并中继远程通信。普通公网房恢复纯 LiveKit 模式；无需改动现有 `/api/` 反向代理规则。详见 [融合房协议与部署边界](docs/FUSION_ROOMS.md)。
+DawnMesh 是支持附近离线通信与自部署远程语音的对讲应用。本仓库提供它的服务端、网页对讲客户端和管理后台：公网房由 DawnMesh Server 管理入房与房间状态，由 LiveKit 处理实时媒体；融合房通过服务端目录和 WebSocket 中继连接不同网络的成员。
 
-完整文档入口见 [文档索引](docs/README.md)。
+手机端的附近 Wi-Fi/蓝牙房、本地离线融合房不要求部署本服务。网页客户端参与公网房，不直接加入手机的近场或融合房。
+
+## 项目与仓库
+
+| 仓库 | 用途 |
+| --- | --- |
+| [DawnMesh · Android](https://github.com/TimeLordFang/DawnMesh) | Android 手机客户端，支持附近通信和自部署远程房间。 |
+| [DawnMesh · iOS](https://github.com/TimeLordFang/DawnMeshIOS) | iPhone 客户端，与 Android 使用兼容的房间和加密协议。 |
+| [DawnMesh Server · 服务端与网页](https://github.com/TimeLordFang/DawnMeshServer) | 公网房控制服务、融合房目录与加密中继，包含网页客户端和管理后台。 |
+
+## 通信方式与部署依赖
+
+| 使用方式 | 是否需要部署服务端 | 说明 |
+| --- | --- | --- |
+| 附近 Wi-Fi / 蓝牙房 | 不需要 | 手机间通过本地链路通信，不依赖互联网。Wi-Fi 协议上限 16 人，蓝牙房 6 人。 |
+| 融合房：本地离线通信 | 不需要 | 处于同一 Wi-Fi、热点或支持的本地链路时，可以离线建房、加入和通话。 |
+| 融合房：跨网络发现与远程中继 | 需要 DawnMesh Server | 已入房且联网的成员连接同一服务端，发布签名目录并中继密文；房主可不直接联网，远程参与仍需可用网关。 |
+| 公网房 | 需要 DawnMesh Server 与 LiveKit | 控制服务处理房间与入房权限，LiveKit 承载实时语音；手机和网页需能访问相应服务与媒体端口。 |
+
+应用不内置公共服务器。要使用公网房，或让融合房跨网络互通，请先按 [服务端部署说明](https://github.com/TimeLordFang/DawnMeshServer#使用容器镜像部署) 部署实例，再在客户端 **设置 → 服务器** 中填写 HTTPS 地址，并按实例配置提供访问凭证，让参与者选择同一实例。
+
+公网部署需配置 HTTPS/WSS、反向代理与媒体端口。融合远程中继转发已加密的近场帧，不走公网房的 LiveKit 媒体通道；服务端的默认 Compose 同时部署控制服务与 LiveKit，以支持两种房型。已有本地融合连接不会因公网中断而结束。
+
+Android Wi-Fi Direct 与苹果点对点 Wi-Fi 是不同无线协议，不能直接互联；跨平台本地通信可使用共同 Wi-Fi/热点或支持的蓝牙路径。设备无线容量、耳机共存和锁屏表现需真机验收，协议人数上限不代表硬件保证。
+
+本仓库不申请或续期证书，API 和 LiveKit 信令可接入已有 Nginx 进行 TLS 卸载。部署、备份和升级所需配置见下方步骤；接口与融合协议见 [文档入口](docs/README.md)。
 
 ## 功能
 
@@ -28,7 +53,7 @@ DawnMesh Server 是「曙光之声」公网对讲模式的自托管控制平面�
 ## 部署要求
 
 - Linux `amd64` 或 `arm64` 服务器
-- Docker Engine 与 Docker Compose，或 Go 1.27.1+
+- Docker Engine 与 Docker Compose，或使用 `go.mod` 指定的 Go 工具链
 - API 和 LiveKit 信令使用的公网域名
 - UDP 57882 与 TCP 57881 可公网访问，或有等价的四层转发
 - 已配置的 Nginx HTTPS 入口
@@ -58,7 +83,7 @@ curl -fsS -H 'Authorization: Bearer <DAWNMESH_ACCESS_TOKEN>' https://talk.exampl
 默认镜像是 `ghcr.io/timelordfang/dawnmeshserver:latest`。如需固定版本，在 `.env` 中设置：
 
 ```dotenv
-DAWNMESH_IMAGE=ghcr.io/timelordfang/dawnmeshserver:1.0.0
+DAWNMESH_IMAGE=ghcr.io/timelordfang/dawnmeshserver:<选定的发布标签>
 ```
 
 首次发布后，请在 GitHub 的 Package settings 中把容器包可见性设为 **Public**，这样未登录用户才能直接拉取；这是 GHCR 包的一次性仓库设置。
@@ -71,13 +96,13 @@ docker compose up -d --build
 
 将 [`deploy/nginx.example.conf`](deploy/nginx.example.conf) 中需要的部分加入现有 Nginx 配置。`/api/` 应允许 WebSocket 升级，并必须转发原始 `Host`、`Origin` 和 `Sec-WebSocket-Protocol`；后者携带浏览器管理通道的临时凭证。服务端每 20 秒发送一次 WebSocket 心跳。若代理仍拒绝升级，网页端会自动切换到带鉴权请求头的 HTTPS 流式管理通道。Nginx 返回 `401` 通常表示凭证请求头未转发，`403` 通常表示 `Host` 与 `Origin` 不一致。优先直通 UDP 57882 和 TCP 57881；HTTPS 健康检查成功只代表控制平面可用，不代表 WebRTC 媒体链路可用。
 
-最后在 Android 客户端的网络对讲页面添加 `DAWNMESH_PUBLIC_URL`，并输入 `DAWNMESH_ACCESS_TOKEN`。
+最后在 Android 或 iOS 客户端的 **设置 → 服务器** 中添加 `DAWNMESH_PUBLIC_URL` 与 `DAWNMESH_ACCESS_TOKEN`，选择同一实例后使用公网房或融合远程中继。
 
 ## 网页对讲客户端
 
 部署完成后打开 `https://talk.example.com/client/`。网页端使用当前服务器，不需要另外填写服务地址；如果配置了 `DAWNMESH_ACCESS_TOKEN`，首次进入时输入该访问凭证即可。
 
-网页客户端与 Android 公网房使用同一套协议和房间：
+网页客户端与 Android、iOS 公网房使用同一套协议和房间：
 
 - 创建、发现和使用四位邀请码加入房间
 - 服务端直接验证入房凭据，邀请码原文不发送给服务器
@@ -89,7 +114,7 @@ docker compose up -d --build
 - 管理通道优先使用 WebSocket，并在代理拒绝升级时自动切换到普通 HTTPS 流；媒体断线时独立刷新短时令牌，并在半小时成员保留窗口内自动恢复
 - 响应式桌面和移动端布局
 
-浏览器麦克风和 Web Crypto 要求 HTTPS 安全上下文；`localhost` 仅用于本地开发。Safari、Chrome、Edge、Firefox 对 WebRTC E2EE、音频后台运行和输出设备切换的支持存在差异。移动浏览器进入锁屏或被系统回收后无法提供与 Android 前台服务相同的后台持续性，长时间对讲仍建议使用 Android App。网页端的 WebSocket 凭证通过 `Sec-WebSocket-Protocol` 请求头传递，Nginx 等反向代理不要记录该请求头。
+浏览器麦克风和 Web Crypto 要求 HTTPS 安全上下文；`localhost` 仅用于本地开发。Safari、Chrome、Edge、Firefox 对 WebRTC E2EE、音频后台运行和输出设备切换的支持存在差异。移动浏览器进入锁屏或被系统回收后无法提供与 Android 前台服务相同的后台持续性，长时间对讲可使用原生手机客户端，后台持续性仍需按实际设备验收。网页端的 WebSocket 凭证通过 `Sec-WebSocket-Protocol` 请求头传递，Nginx 等反向代理不要记录该请求头。
 
 访问凭证只写入当前标签页的 `sessionStorage`，昵称和随机设备标识写入 `localStorage`。刷新页面后会自动恢复到服务器房间列表；邀请码、房间密钥和成员恢复令牌仍只保存在页面内存中，因此不会自动重新进入之前的房间。关闭标签页后访问凭证也会清除。
 
@@ -191,15 +216,16 @@ SQLite 数据保存在 `dawnmesh-data` 卷中。备份时同时保存数据库�
 ```bash
 go test -race ./...
 go vet ./...
-go install golang.org/x/vuln/cmd/govulncheck@v1.8.0
-govulncheck ./...
+# 漏洞扫描工具和配置以 .github/workflows/ci.yml 为准
 ```
 
 推送到 `main` 或创建 Pull Request 时，CI 会执行模块一致性检查、竞态测试、`go vet`、漏洞扫描和 Linux 双架构编译。推送 `v*` 标签时，Release 工作流会发布二进制压缩包、SHA-256 校验文件和 GHCR 多架构容器镜像。Dependabot 每周检查 Go 模块、Docker 基础镜像和 GitHub Actions。
 
+设置 `RELEASE_TAG` 为选定且未占用的发布标签后执行：
+
 ```bash
-git tag -a v0.1.0 -m "DawnMesh Server v0.1.0"
-git push origin v0.1.0
+git tag -a "$RELEASE_TAG" -m "DawnMesh Server $RELEASE_TAG"
+git push origin "$RELEASE_TAG"
 ```
 
 ## 开源协议
@@ -208,12 +234,12 @@ DawnMesh Server 使用 [GNU Affero General Public License v3.0](LICENSE)（`AGPL
 
 ### 本地一键编译与打包
 
-需要 Go（版本见 `go.mod`）、Node.js 24 或更新稳定版，以及 npm。仓库根目录执行：
+需要 Go（版本见 `go.mod`）、Node.js 与 npm（版本要求见 `frontend/package.json`）。仓库根目录执行：
 
 ```bash
 ./scripts/build.sh                      # 当前平台，完整检查并打包
 ./scripts/build.sh --linux              # Linux amd64 + arm64
-./scripts/build.sh --os linux --arch arm64 --version 1.0.0
+./scripts/build.sh --os linux --arch arm64
 ```
 
 脚本会执行 `npm ci`、TypeScript 检查、Vite 构建、前端协议回归、Go 测试与 vet，然后生成 `dist/DawnMeshServer-版本-平台-架构/` 中的二进制、包含二进制与许可告知文件的 `.tar.gz` 和 `dist/SHA256SUMS`。配置与部署文件不复制到发布包中，以对应版本标签中的仓库文件为准。`--skip-tests` 可跳过测试，但仍进行 TypeScript 类型检查。前端及 LiveKit 加密 Worker 均由 `go:embed` 编入 `dawnmesh-server`，部署时无需 Node.js 或外置前端目录。LiveKit 媒体服务仍按原部署方式运行。
@@ -221,7 +247,5 @@ DawnMesh Server 使用 [GNU Affero General Public License v3.0](LICENSE)（`AGPL
 前端源码位于 `frontend/`，生成资源写入 `internal/server/web/`，该目录属于构建产物，不纳入 Git。请使用 `./scripts/build.sh` 完成正式构建；若需要手动执行 `go build`、`go test` 或 `go vet`，必须先运行 `npm --prefix frontend ci && npm --prefix frontend run build`。Docker 和 GitHub Actions 会自动完成这一步。
 
 网页对讲支持在房间页面按住空格键通话；松开、切换窗口、页面隐藏或触摸取消立即停止按住通话。输入框及对话框不会触发此快捷键。首次发言需允许麦克风，收听不需要麦克风权限；若浏览器限制自动播放，请点击“启用收听”。公网访问须使用 HTTPS，且反向代理不能覆盖网页的麦克风权限策略。更新部署时请同步 `deploy/nginx.example.conf` 中的 `/ui/assets/` 路由，以加载新前端与加密 Worker。
-
-当前正式版 0.3.3 配套 Android 1.1.3 / iOS 1.0.2，改善媒体 SDK 按需加载并保留默认构建体积检查。三端线协议保持兼容，融合房继续支持 16 人。详见 [正式版发布说明](docs/RELEASE_0.3.3.md)。
 
 反向代理限流：`DAWNMESH_TRUSTED_PROXY_CIDRS` 默认只信任 `127.0.0.1/32,::1/128`，设置为空可关闭代理头信任。裸机 nginx 使用默认值；Compose 部署请用 `docker network inspect` 查出应用网络实际网关，仅添加该网关的 `/32`（IPv6 为 `/128`），重建容器后验证两名客户端的 IP 分桶。示例 nginx 会覆盖外部 XFF；前置 CDN 时先配置 nginx 的可信 real-IP 链。不要信任整个私有网段。升级前将非空的短访问 token 换成至少 32 字符；空 token 仍表示公开实例，服务端会记录提示。

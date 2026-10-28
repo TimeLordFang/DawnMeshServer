@@ -1,6 +1,6 @@
 # DawnMesh Server 文档索引
 
-Server/Web 当前正式版为 0.3.3；协议 2，HTTP 路径保留 /api/v1。
+服务端、网页、部署与协议的文档入口；下载与历史变更见 GitHub Releases。
 
 ## 使用与维护
 
@@ -9,18 +9,9 @@ Server/Web 当前正式版为 0.3.3；协议 2，HTTP 路径保留 /api/v1。
 - [客户端能力与公告配置](CLIENT_FEATURES.md)
 - [维护事项与验证入口](MAINTENANCE.md)
 
-## 正式版发布说明
+## 下载与历史说明
 
-仅保留正式版独立发布说明。预发布阶段仍有效的内容并入对应正式版；已替代的实验方案不再作为使用指南。历史版本行为以各自说明为准。
-
-- [0.3.3](RELEASE_0.3.3.md)
-- [0.3.2](RELEASE_0.3.2.md)
-- [0.3.1](RELEASE_0.3.1.md)
-- [0.3.0](RELEASE_0.3.0.md)
-- [0.2.6](RELEASE_0.2.6.md)
-- [0.2.5](RELEASE_0.2.5.md)
-- [0.2.4](RELEASE_0.2.4.md)
-- [0.2.3](RELEASE_0.2.3.md)
+[GitHub Releases](https://github.com/TimeLordFang/DawnMeshServer/releases) 提供发布包与变更说明；旧版详细资料可从对应 Git 标签追溯。
 
 ## 文档维护约定
 
