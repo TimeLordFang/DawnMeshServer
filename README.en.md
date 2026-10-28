@@ -35,6 +35,12 @@ The browser client joins Internet rooms, not mobile nearby or fusion rooms. Appl
 
 This project does not issue or renew TLS certificates. Put the API and LiveKit signaling behind your existing HTTPS/WSS reverse proxy; follow the deployment and port instructions below. See the [documentation index](docs/README.md) for API and fusion details.
 
+## Known issue
+
+**Bluetooth-room communication may become severely intermittent while a Bluetooth headset is connected at the same time.** In current testing, Bluetooth-room communication works normally without a Bluetooth headset. This observation does not guarantee the same result across every phone, headset and operating-system combination.
+
+If audio is intermittent, disconnect the headset and compare using the phone audio, recording the phone, headset and OS versions. This is a mobile Bluetooth-room scenario; it does not by itself indicate a problem with the Internet-room server.
+
 ## Features
 
 - 25 participants per room by default, configurable through `DAWNMESH_MAX_PARTICIPANTS`
