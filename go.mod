@@ -6,10 +6,10 @@ toolchain go1.27.3
 
 require (
 	github.com/coder/websocket v1.8.15
-	github.com/livekit/protocol v1.53.1
+	github.com/livekit/protocol v1.53.2
 	github.com/livekit/server-sdk-go/v2 v2.19.0
 	google.golang.org/protobuf v1.36.12
-	modernc.org/sqlite v1.61.0
+	modernc.org/sqlite v1.61.1
 )
 
 require (
