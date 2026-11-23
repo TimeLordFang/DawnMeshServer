@@ -6,10 +6,10 @@ toolchain go1.27.3
 
 require (
 	github.com/coder/websocket v1.8.15
-	github.com/livekit/protocol v1.53.1
-	github.com/livekit/server-sdk-go/v2 v2.19.0
+	github.com/livekit/protocol v1.54.1
+	github.com/livekit/server-sdk-go/v2 v2.20.0
 	google.golang.org/protobuf v1.36.12
-	modernc.org/sqlite v1.61.0
+	modernc.org/sqlite v1.62.0
 )
 
 require (
@@ -48,6 +48,7 @@ require (
 	github.com/petermattis/goid v0.0.0-20260918085751-abfca077860b // indirect
 	github.com/pion/datachannel v1.6.3 // indirect
 	github.com/pion/dtls/v3 v3.1.15 // indirect
+	github.com/pion/dtls/v4 v4.0.0-rc.8 // indirect
 	github.com/pion/ice/v4 v4.4.8 // indirect
 	github.com/pion/interceptor v0.1.51 // indirect
 	github.com/pion/logging v0.2.4 // indirect
@@ -89,7 +90,7 @@ require (
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20261026165753-2ffab32bce7e // indirect
 	google.golang.org/grpc v1.85.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
-	modernc.org/libc v1.79.1 // indirect
+	modernc.org/libc v1.80.1 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.12.1 // indirect
 )
